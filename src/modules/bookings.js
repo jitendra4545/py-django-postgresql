@@ -130,9 +130,62 @@ async function createReservationFromDraft(draft, userId, paymentMethodType) {
         const reservation = await exec(`INSERT INTO reservations (uuid,reservation_no,service_type,customer_id,reservation_form,currency,discount,user_id,status,payment_status,payment_method,is_pick_up_and_collection,dev_vehicle_reserved,is_invoice,office_location_id,invoice_office_id,responsible_person_id,created_at,updated_at,special_note,data_sync_to_zoho)
        VALUES (?,?,?,?,2,?,?,?,?,0,0,0,0,0,1,0,0,NOW(),NOW(),?,0)`, [reservationUuid, reservationNo, draft.service_type_id, draft.customer_id, quote.currency === 'EUR' ? '€' : quote.currency, quote.breakdown.discount, userId, initialStatus, d.notes ?? null], conn);
         const reservationId = reservation.insertId;
-        const detail = await exec(`INSERT INTO reservation_details (reservation_id,is_extra_service,days,is_hourly,approximate_distance,pick_up_location,drop_off_location,pick_up_date,drop_off_date,pick_up_time,drop_off_time,pick_up_country_id,drop_off_country_id,pick_up_city,drop_off_city,pick_up_city_id,drop_off_city_id,service_details,provider_cost,other_cost,status,is_delete_history,created_at,updated_at,special_note)
-       VALUES (?,0,?,0,?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,0,NULL,1,0,NOW(),NOW(),?)`, [reservationId, quote.days, d.approximateDistance ?? 1, d.pickupLocation, d.dropoffLocation ?? null, d.pickupDate, dropoffDate, d.pickupTime, dropoffTime, pickupCountryId, dropoffCountryId, d.pickupCity ?? null, d.dropoffCity ?? null, JSON.stringify({ passengers: d.passengers, passengerContact: d.passengerContact }), d.notes ?? null], conn);
-        const detailId = detail.insertId;
+    //     const detail = await exec(`INSERT INTO reservation_details (reservation_id,is_extra_service,days,is_hourly,approximate_distance,pick_up_location,drop_off_location,pick_up_date,drop_off_date,pick_up_time,drop_off_time,pick_up_country_id,drop_off_country_id,pick_up_city,drop_off_city,pick_up_city_id,drop_off_city_id,service_details,provider_cost,other_cost,status,is_delete_history,created_at,updated_at,special_note)
+    //    VALUES (?,0,?,0,?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,0,NULL,1,0,NOW(),NOW(),?)`, [reservationId, quote.days, d.approximateDistance ?? 1, d.pickupLocation, d.dropoffLocation ?? null, d.pickupDate, dropoffDate, d.pickupTime, dropoffTime, pickupCountryId, dropoffCountryId, d.pickupCity ?? null, d.dropoffCity ?? null, JSON.stringify({ passengers: d.passengers, passengerContact: d.passengerContact }), d.notes ?? null], conn);
+    const detail = await exec(
+  `INSERT INTO reservation_details (
+    reservation_id,
+    is_extra_service,
+    days,
+    is_hourly,
+    approximate_distance,
+    pick_up_location,
+    drop_off_location,
+    pick_up_date,
+    drop_off_date,
+    pick_up_time,
+    drop_off_time,
+    pick_up_country_id,
+    drop_off_country_id,
+    pick_up_city,
+    drop_off_city,
+    pick_up_city_id,
+    drop_off_city_id,
+    service_details,
+    provider_cost,
+    other_cost,
+    status,
+    is_delete_history,
+    created_at,
+    updated_at,
+    special_note
+  )
+  VALUES (
+    ?,0,?,0,?,?,?,?,?,?,?,?,?,?,?,0,0,?,0,NULL,1,0,NOW(),NOW(),?
+  )`,
+  [
+    reservationId,
+    quote.days,
+    d.approximateDistance ?? 1,
+    d.pickupLocation,
+    d.dropoffLocation ?? null,
+    d.pickupDate,
+    dropoffDate,
+    d.pickupTime,
+    dropoffTime,
+    pickupCountryId,
+    dropoffCountryId,
+    d.pickupCity ?? null,
+    d.dropoffCity ?? null,
+    JSON.stringify({
+      passengers: d.passengers ?? null,
+      passengerContact: d.passengerContact ?? null
+    }),
+    d.notes ?? null
+  ],
+  conn
+);   
+    const detailId = detail.insertId;
         await exec(`INSERT INTO reservation_vehicles (reservation_id,reservation_details_id,vehicle_id,pick_up_date,drop_off_date,pick_up_time,drop_off_time,status,user_id,created_at,updated_at)
        VALUES (?,?,?,?,?,?,?,1,?,NOW(),NOW())`, [reservationId, detailId, o.vehicleId, d.pickupDate, dropoffDate, d.pickupTime, dropoffTime, userId], conn);
         for (const date of dateRange(d.pickupDate, dropoffDate)) {
