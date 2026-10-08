@@ -1,118 +1,48 @@
-// import mysql from 'mysql2/promise';
-// import { env } from '../config/env.js';
-// export const db = mysql.createPool({
-//     host: env.DB_HOST,
-//     port: env.DB_PORT,
-//     user: env.DB_USER,
-//     password: env.DB_PASSWORD,
-//     database: env.DB_NAME,
-//     connectionLimit: env.DB_CONNECTION_LIMIT,
-//     waitForConnections: true,
-//     queueLimit: 0,
-//     enableKeepAlive: true,
-//     keepAliveInitialDelay: 0,
-//     decimalNumbers: true,
-//     timezone: 'Z'
-// });
-// export async function rows(sql, params = [], executor = db) {
-//     const [result] = await executor.execute(sql, params);
-//     return result;
-// }
-// export async function one(sql, params = [], executor = db) {
-//     const result = await rows(sql, params, executor);
-//     return result[0] ?? null;
-// }
-// export async function exec(sql, params = [], executor = db) {
-//     const [result] = await executor.execute(sql, params);
-//     return result;
-// }
-// export async function transaction(fn) {
-//     const conn = await db.getConnection();
-//     try {
-//         await conn.beginTransaction();
-//         const result = await fn(conn);
-//         await conn.commit();
-//         return result;
-//     }
-//     catch (error) {
-//         await conn.rollback();
-//         throw error;
-//     }
-//     finally {
-//         conn.release();
-//     }
-// }
-
-
-
-
-
-
-
-
-
-
-
-
-
+import fs from 'node:fs';
 import mysql from 'mysql2/promise';
-
 import { env } from '../config/env.js';
 
-export const db = mysql.createPool({
-    host: env.DB_HOST,
-    port: env.DB_PORT,
-    user: env.DB_USER,
-    password: env.DB_PASSWORD,
-    database: env.DB_NAME,
-    connectionLimit: env.DB_CONNECTION_LIMIT,
+const ssl = env.DB_SSL
+  ? {
+      rejectUnauthorized: true,
+      ...(env.DB_SSL_CA_PATH ? { ca: fs.readFileSync(env.DB_SSL_CA_PATH, 'utf8') } : {}),
+    }
+  : undefined;
 
-    waitForConnections: true,
-    queueLimit: 0,
-
-    enableKeepAlive: true,
-    keepAliveInitialDelay: 0,
-
-    decimalNumbers: true,
-    timezone: 'Z',
-
-    ssl: env.DB_SSL
-        ? {
-              rejectUnauthorized: false
-          }
-        : undefined
+export const pool = mysql.createPool({
+  host: env.DB_HOST,
+  port: env.DB_PORT,
+  user: env.DB_USER,
+  password: env.DB_PASSWORD,
+  database: env.DB_NAME,
+  connectionLimit: env.DB_CONNECTION_LIMIT,
+  waitForConnections: true,
+  decimalNumbers: true,
+  timezone: 'Z',
+  ssl,
 });
 
-export async function rows(sql, params = [], executor = db) {
-    const [result] = await executor.execute(sql, params);
+export const query = async (sql, params = []) => {
+  const [rows] = await pool.execute(sql, params);
+  return rows;
+};
+
+export const one = async (sql, params = []) => {
+  const rows = await query(sql, params);
+  return rows[0] ?? null;
+};
+
+export const transaction = async (work) => {
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const result = await work(connection);
+    await connection.commit();
     return result;
-}
-
-export async function one(sql, params = [], executor = db) {
-    const result = await rows(sql, params, executor);
-    return result[0] ?? null;
-}
-
-export async function exec(sql, params = [], executor = db) {
-    const [result] = await executor.execute(sql, params);
-    return result;
-}
-
-export async function transaction(fn) {
-    const conn = await db.getConnection();
-
-    try {
-        await conn.beginTransaction();
-
-        const result = await fn(conn);
-
-        await conn.commit();
-
-        return result;
-    } catch (error) {
-        await conn.rollback();
-        throw error;
-    } finally {
-        conn.release();
-    }
-}
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+};

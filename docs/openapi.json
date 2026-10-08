@@ -1,0 +1,278 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Drive Luxury Release 1 API",
+    "version": "2.0.0",
+    "description": "API contract for the Client + Agency Agent application, Chauffeur application, and back-office integration. Rental inspection and AI features are intentionally outside Release 1."
+  },
+  "servers": [{ "url": "/api/v1", "description": "Current server" }],
+  "tags": [
+    { "name": "Authentication" },
+    { "name": "Catalog" },
+    { "name": "Bookings" },
+    { "name": "Client" },
+    { "name": "Agency Agent" },
+    { "name": "Chauffeur" },
+    { "name": "Communication" },
+    { "name": "Payments" },
+    { "name": "Notifications" },
+    { "name": "Documents" },
+    { "name": "Operations" }
+  ],
+  "paths": {
+    "/auth/client/register": {
+      "post": { "tags": ["Authentication"], "summary": "Register a client account", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ClientRegistration" } } } }, "responses": { "201": { "$ref": "#/components/responses/AuthResponse" }, "409": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/auth/login": {
+      "post": { "tags": ["Authentication"], "summary": "Log in any active app user", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Login" } } } }, "responses": { "200": { "$ref": "#/components/responses/AuthResponse" }, "401": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/auth/refresh": {
+      "post": { "tags": ["Authentication"], "summary": "Rotate a refresh token", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["refreshToken"], "properties": { "refreshToken": { "type": "string" } } } } } }, "responses": { "200": { "$ref": "#/components/responses/AuthResponse" }, "401": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/auth/logout": {
+      "post": { "tags": ["Authentication"], "summary": "Revoke a session and unregister its device", "security": [{ "bearerAuth": [] }], "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "refreshToken": { "type": "string" }, "deviceId": { "type": "string" } } } } } }, "responses": { "204": { "description": "Logged out" } } }
+    },
+    "/auth/me": {
+      "get": { "tags": ["Authentication"], "summary": "Get the current user and role profile", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Current user" }, "401": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/auth/password/forgot": {
+      "post": { "tags": ["Authentication"], "summary": "Request password reset", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["email"], "properties": { "email": { "type": "string", "format": "email" } } } } } }, "responses": { "200": { "description": "Request accepted" } } }
+    },
+    "/auth/password/reset": {
+      "post": { "tags": ["Authentication"], "summary": "Reset password", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["token", "password"], "properties": { "token": { "type": "string" }, "password": { "type": "string", "minLength": 10 } } } } } }, "responses": { "200": { "description": "Password changed" } } }
+    },
+    "/auth/invitations/accept": {
+      "post": { "tags": ["Authentication"], "summary": "Activate an invited Agency Agent or Chauffeur account", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["token", "password"], "properties": { "token": { "type": "string" }, "password": { "type": "string", "minLength": 10 } } } } } }, "responses": { "200": { "description": "Account activated" } } }
+    },
+    "/catalog/services": {
+      "get": { "tags": ["Catalog"], "summary": "List all Release 1 services", "responses": { "200": { "description": "Service catalog" } } }
+    },
+    "/catalog/vehicle-classes": {
+      "get": { "tags": ["Catalog"], "summary": "List classes backed by available online vehicles", "description": "Client and Agent apps receive class-level choices only. Internal vehicle status values are never returned. When startAt and endAt are supplied together, blocked, reserved and already allocated vehicles are excluded.", "parameters": [{ "$ref": "#/components/parameters/ServiceCodeQuery" }, { "name": "countryId", "in": "query", "required": true, "schema": { "type": "integer" } }, { "name": "passengerCount", "in": "query", "schema": { "type": "integer", "default": 1 } }, { "name": "startAt", "in": "query", "schema": { "type": "string", "format": "date-time" } }, { "name": "endAt", "in": "query", "schema": { "type": "string", "format": "date-time" } }], "responses": { "200": { "description": "Available vehicle classes without fleet status fields" } } }
+    },
+    "/catalog/options": {
+      "get": { "tags": ["Catalog"], "summary": "List options for a service", "parameters": [{ "$ref": "#/components/parameters/ServiceCodeQuery" }], "responses": { "200": { "description": "Options" } } }
+    },
+    "/bookings/drafts": {
+      "post": { "tags": ["Bookings"], "summary": "Create a booking draft for self or a managed client", "security": [{ "bearerAuth": [] }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["serviceCode"], "properties": { "serviceCode": { "$ref": "#/components/schemas/InstantServiceCode" }, "customerId": { "type": "integer", "description": "Required for Agency Agent; ignored for Client" } } } } } }, "responses": { "201": { "description": "Draft created" } } }
+    },
+    "/bookings/drafts/{draftId}": {
+      "get": { "tags": ["Bookings"], "summary": "Get a booking draft", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/DraftId" }], "responses": { "200": { "description": "Draft" } } }
+    },
+    "/bookings/drafts/{draftId}/details": {
+      "put": { "tags": ["Bookings"], "summary": "Replace draft passenger, itinerary, vehicle class and options", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/DraftId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BookingDetails" } } } }, "responses": { "200": { "description": "Draft ready" }, "422": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/bookings/drafts/{draftId}/quote": {
+      "post": { "tags": ["Bookings"], "summary": "Create a 30-minute immutable quotation", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/DraftId" }], "responses": { "200": { "description": "Quote breakdown" }, "422": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/bookings/drafts/{draftId}/checkout": {
+      "post": { "tags": ["Bookings"], "summary": "Create legacy-compatible reservation and payment intent", "description": "Requires Idempotency-Key and a current quote.", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/DraftId" }, { "$ref": "#/components/parameters/IdempotencyKey" }], "responses": { "201": { "description": "Booking and payment created" }, "409": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/bookings": {
+      "get": { "tags": ["Bookings"], "summary": "List bookings accessible to current Client or Agent", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PerPage" }, { "name": "status", "in": "query", "schema": { "type": "string" } }], "responses": { "200": { "$ref": "#/components/responses/Paginated" } } }
+    },
+    "/bookings/{reservationId}": {
+      "get": { "tags": ["Bookings"], "summary": "Get booking, legs, costs, timeline, assignment and payment", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/ReservationId" }], "responses": { "200": { "description": "Booking detail" }, "403": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/bookings/{reservationId}/change-requests": {
+      "post": { "tags": ["Bookings"], "summary": "Request a validated booking change", "description": "The request is reviewed by operations. Approval applies the fields, reprices the booking, recreates agency commissions and creates a Stripe payment or refund adjustment when required.", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/ReservationId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["reason", "requestedChanges"], "properties": { "reason": { "type": "string" }, "requestedChanges": { "$ref": "#/components/schemas/BookingChanges" } } } } } }, "responses": { "201": { "description": "Change request submitted" } } }
+    },
+    "/bookings/{reservationId}/cancellation-requests": {
+      "post": { "tags": ["Bookings"], "summary": "Request cancellation and possible refund", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/ReservationId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["reason"], "properties": { "reason": { "type": "string" } } } } } }, "responses": { "201": { "description": "Cancellation request submitted" } } }
+    },
+    "/bookings/vip-requests": {
+      "post": { "tags": ["Bookings"], "summary": "Submit an Airport VIP request for manual confirmation", "security": [{ "bearerAuth": [] }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/VipRequest" } } } }, "responses": { "201": { "description": "Request submitted" } } }
+    },
+    "/bookings/concierge-requests": {
+      "post": { "tags": ["Bookings"], "summary": "Submit a bespoke concierge request", "security": [{ "bearerAuth": [] }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ConciergeRequest" } } } }, "responses": { "201": { "description": "Request submitted" } } }
+    },
+    "/bookings/manual-requests/vip": {
+      "get": { "tags": ["Bookings"], "summary": "List accessible Airport VIP requests", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "VIP requests" } } }
+    },
+    "/bookings/manual-requests/concierge": {
+      "get": { "tags": ["Bookings"], "summary": "List accessible Concierge requests", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Concierge requests" } } }
+    },
+    "/client/dashboard": {
+      "get": { "tags": ["Client"], "summary": "Get active, upcoming and recent bookings", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Client dashboard" } } }
+    },
+    "/client/profile": {
+      "get": { "tags": ["Client"], "summary": "Get client profile", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Profile" } } },
+      "patch": { "tags": ["Client"], "summary": "Update client profile", "security": [{ "bearerAuth": [] }], "requestBody": { "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true } } } }, "responses": { "200": { "description": "Updated" } } }
+    },
+    "/client/bookings/{reservationId}/tracking": {
+      "get": { "tags": ["Client"], "summary": "Get assignment status, latest GPS location and timeline", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/ReservationId" }], "responses": { "200": { "description": "Tracking state" } } }
+    },
+    "/client/bookings/{reservationId}/receipt": {
+      "get": { "tags": ["Client"], "summary": "Get structured payment receipt data", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/ReservationId" }], "responses": { "200": { "description": "Receipt" } } }
+    },
+    "/agent/dashboard": {
+      "get": { "tags": ["Agency Agent"], "summary": "Get roster, booking, alert and commission summary", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Agent dashboard" } } }
+    },
+    "/agent/clients": {
+      "get": { "tags": ["Agency Agent"], "summary": "List the agent's assigned clients", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PerPage" }, { "name": "search", "in": "query", "schema": { "type": "string" } }], "responses": { "200": { "$ref": "#/components/responses/Paginated" } } },
+      "post": { "tags": ["Agency Agent"], "summary": "Create and assign a client", "security": [{ "bearerAuth": [] }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ManagedClient" } } } }, "responses": { "201": { "description": "Client created" } } }
+    },
+    "/agent/clients/{customerId}": {
+      "get": { "tags": ["Agency Agent"], "summary": "Get a managed client contact card", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "customerId", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "Client card" } } }
+    },
+    "/agent/clients/{customerId}/bookings": {
+      "get": { "tags": ["Agency Agent"], "summary": "List bookings for a managed client", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "customerId", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "Client bookings" } } }
+    },
+    "/agent/commissions": {
+      "get": { "tags": ["Agency Agent"], "summary": "Get agency commission entries", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Commission entries" } } }
+    },
+    "/chauffeur/dashboard": {
+      "get": { "tags": ["Chauffeur"], "summary": "Get today's and upcoming assignments", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Chauffeur dashboard" } } }
+    },
+    "/chauffeur/assignments/{assignmentId}": {
+      "get": { "tags": ["Chauffeur"], "summary": "Get one assigned service and passenger details", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/AssignmentId" }], "responses": { "200": { "description": "Assignment detail" } } }
+    },
+    "/chauffeur/assignments/{assignmentId}/acknowledge": {
+      "post": { "tags": ["Chauffeur"], "summary": "Acknowledge an offered assignment", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/AssignmentId" }], "responses": { "200": { "description": "Acknowledged" } } }
+    },
+    "/chauffeur/assignments/{assignmentId}/decline": {
+      "post": { "tags": ["Chauffeur"], "summary": "Decline an offered assignment", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/AssignmentId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["reason"], "properties": { "reason": { "type": "string" } } } } } }, "responses": { "200": { "description": "Declined" } } }
+    },
+    "/chauffeur/assignments/{assignmentId}/status": {
+      "post": { "tags": ["Chauffeur"], "summary": "Advance a ride through the controlled state machine", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/AssignmentId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AssignmentStatusUpdate" } } } }, "responses": { "200": { "description": "Status updated" }, "409": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/chauffeur/assignments/{assignmentId}/location": {
+      "post": { "tags": ["Chauffeur"], "summary": "Submit live GPS location during an active assignment", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/AssignmentId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LocationPing" } } } }, "responses": { "202": { "description": "Location accepted" } } }
+    },
+    "/chauffeur/assignments/{assignmentId}/expenses": {
+      "post": { "tags": ["Chauffeur"], "summary": "Submit a service expense", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/AssignmentId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Expense" } } } }, "responses": { "201": { "description": "Expense submitted" } } }
+    },
+    "/chauffeur/assignments/{assignmentId}/incidents": {
+      "post": { "tags": ["Chauffeur"], "summary": "Report an operational or safety incident", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/AssignmentId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Incident" } } } }, "responses": { "201": { "description": "Incident reported" } } }
+    },
+    "/chauffeur/history": {
+      "get": { "tags": ["Chauffeur"], "summary": "List completed/cancelled assignment history and earnings", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PerPage" }], "responses": { "200": { "$ref": "#/components/responses/Paginated" } } }
+    },
+    "/chauffeur/documents": {
+      "get": { "tags": ["Chauffeur"], "summary": "List the chauffeur's private documents", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Documents" } } }
+    },
+    "/communication/bookings/{reservationId}/conversation": {
+      "post": { "tags": ["Communication"], "summary": "Open or synchronize a booking conversation", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/ReservationId" }], "responses": { "201": { "description": "Conversation" } } }
+    },
+    "/communication/conversations/{conversationId}/messages": {
+      "get": { "tags": ["Communication"], "summary": "Read paginated messages", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/ConversationId" }, { "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PerPage" }], "responses": { "200": { "$ref": "#/components/responses/Paginated" } } },
+      "post": { "tags": ["Communication"], "summary": "Send a text or document message", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/ConversationId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "properties": { "messageType": { "enum": ["TEXT", "DOCUMENT"] }, "body": { "type": "string" }, "documentId": { "type": "integer" } } } } } }, "responses": { "201": { "description": "Message sent" } } }
+    },
+    "/communication/bookings/{reservationId}/masked-call": {
+      "post": { "tags": ["Communication"], "summary": "Create a temporary masked-call bridge", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/ReservationId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["recipientRole"], "properties": { "recipientRole": { "enum": ["CLIENT", "CHAUFFEUR", "SUPPORT"] } } } } } }, "responses": { "201": { "description": "Call bridge ready" } } }
+    },
+    "/payments/{paymentId}": {
+      "get": { "tags": ["Payments"], "summary": "Get payment status", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/PaymentId" }], "responses": { "200": { "description": "Payment" } } }
+    },
+    "/payments/{paymentId}/mock-confirm": {
+      "post": { "tags": ["Payments"], "summary": "Confirm a mock payment in non-production only", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/PaymentId" }], "responses": { "200": { "description": "Paid" }, "404": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/payments/{paymentId}/retry": {
+      "post": { "tags": ["Payments"], "summary": "Retry creation of a failed payment intent", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/PaymentId" }], "responses": { "200": { "description": "Payment intent recreated" }, "409": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/payments/webhook": {
+      "post": { "tags": ["Payments"], "summary": "Receive a signed payment-provider event", "parameters": [{ "name": "x-webhook-signature", "in": "header", "required": true, "schema": { "type": "string" } }], "responses": { "200": { "description": "Received" }, "401": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/notifications": {
+      "get": { "tags": ["Notifications"], "summary": "List current user's notifications", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PerPage" }], "responses": { "200": { "$ref": "#/components/responses/Paginated" } } }
+    },
+    "/notifications/{id}/read": {
+      "post": { "tags": ["Notifications"], "summary": "Mark one notification read", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "204": { "description": "Marked read" } } }
+    },
+    "/notifications/read-all": {
+      "post": { "tags": ["Notifications"], "summary": "Mark all notifications read", "security": [{ "bearerAuth": [] }], "responses": { "204": { "description": "Marked read" } } }
+    },
+    "/documents": {
+      "post": { "tags": ["Documents"], "summary": "Upload one private JPEG, PNG, WebP or PDF", "security": [{ "bearerAuth": [] }], "requestBody": { "required": true, "content": { "multipart/form-data": { "schema": { "type": "object", "required": ["file"], "properties": { "file": { "type": "string", "format": "binary" }, "category": { "type": "string" }, "reservationId": { "type": "integer" }, "expiresAt": { "type": "string", "format": "date" } } } } } }, "responses": { "201": { "description": "Stored privately" }, "415": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/documents/{id}/download": {
+      "get": { "tags": ["Documents"], "summary": "Download an authorized private document", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "File bytes" }, "403": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/operations/agency-agents": {
+      "post": { "tags": ["Operations"], "summary": "Invite an Agency Agent", "security": [{ "bearerAuth": [] }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AgencyAgentInvitation" } } } }, "responses": { "201": { "description": "Invitation created" } } }
+    },
+    "/operations/chauffeurs": {
+      "post": { "tags": ["Operations"], "summary": "Invite a Chauffeur", "security": [{ "bearerAuth": [] }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ChauffeurInvitation" } } } }, "responses": { "201": { "description": "Invitation created" } } }
+    },
+    "/operations/agent-client-assignments": {
+      "post": { "tags": ["Operations"], "summary": "Assign an existing client to an Agency Agent", "security": [{ "bearerAuth": [] }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["agentId", "customerId"], "properties": { "agentId": { "type": "integer" }, "customerId": { "type": "integer" }, "notes": { "type": "string" } } } } } }, "responses": { "201": { "description": "Assigned" } } }
+    },
+    "/operations/bookings/pending": {
+      "get": { "tags": ["Operations"], "summary": "List bookings needing an operational decision", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Pending queue" } } }
+    },
+    "/operations/bookings/{reservationId}/decision": {
+      "post": { "tags": ["Operations"], "summary": "Confirm or reject a paid/pending booking", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/ReservationId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["decision"], "properties": { "decision": { "enum": ["CONFIRM", "REJECT"] }, "note": { "type": "string" } } } } } }, "responses": { "200": { "description": "Decision applied" } } }
+    },
+    "/operations/bookings/{reservationId}/legs/{detailId}/assign-chauffeur": {
+      "post": { "tags": ["Operations"], "summary": "Assign an available chauffeur to one booking leg", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/ReservationId" }, { "$ref": "#/components/parameters/DetailId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["driverId", "scheduledStartAt", "scheduledEndAt"], "properties": { "driverId": { "type": "integer" }, "scheduledStartAt": { "type": "string", "format": "date-time" }, "scheduledEndAt": { "type": "string", "format": "date-time" } } } } } }, "responses": { "201": { "description": "Assignment offered" }, "409": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/operations/vehicles/available": {
+      "get": { "tags": ["Operations"], "summary": "List physical vehicles available for allocation", "description": "Admin/Staff only. Returns status=1 and online-booking-enabled vehicles after excluding legacy blocks, reserved dates and overlapping active allocations.", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "vehicleClassId", "in": "query", "required": true, "schema": { "type": "integer" } }, { "name": "startAt", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } }, { "name": "endAt", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } }], "responses": { "200": { "description": "Available physical vehicles" }, "422": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/operations/bookings/{reservationId}/legs/{detailId}/assign-vehicle": {
+      "post": { "tags": ["Operations"], "summary": "Allocate an available physical vehicle after class selection", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/ReservationId" }, { "$ref": "#/components/parameters/DetailId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["vehicleId"], "properties": { "vehicleId": { "type": "integer" } } } } } }, "responses": { "201": { "description": "Vehicle allocated" }, "409": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/operations/change-requests/{requestId}/decision": {
+      "post": { "tags": ["Operations"], "summary": "Approve/reject and automatically apply/reprice a booking change", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/RequestId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RequestDecision" } } } }, "responses": { "200": { "description": "Decision, booking mutation and payment adjustment applied" } } }
+    },
+    "/operations/cancellation-requests/{requestId}/decision": {
+      "post": { "tags": ["Operations"], "summary": "Approve/reject cancellation and create the Stripe refund", "description": "A paid cancellation stays refund-pending until Stripe confirms the refund by webhook.", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/RequestId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RequestDecision" } } } }, "responses": { "200": { "description": "Decision and any refund request applied" } } }
+    },
+    "/operations/expenses/{expenseId}": {
+      "patch": { "tags": ["Operations"], "summary": "Review a chauffeur expense", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "expenseId", "in": "path", "required": true, "schema": { "type": "integer" } }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["status"], "properties": { "status": { "enum": ["APPROVED", "REJECTED", "REIMBURSED"] }, "reviewNote": { "type": "string" } } } } } }, "responses": { "200": { "description": "Expense updated" } } }
+    },
+    "/operations/incidents/{incidentId}": {
+      "patch": { "tags": ["Operations"], "summary": "Review or resolve an incident", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "incidentId", "in": "path", "required": true, "schema": { "type": "integer" } }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["status"], "properties": { "status": { "enum": ["IN_REVIEW", "RESOLVED", "CLOSED"] }, "resolutionNote": { "type": "string" } } } } } }, "responses": { "200": { "description": "Incident updated" } } }
+    },
+    "/operations/vip-requests/{requestId}": {
+      "patch": { "tags": ["Operations"], "summary": "Update an Airport VIP request", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/RequestId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ManualRequestStatus" } } } }, "responses": { "200": { "description": "VIP request updated" } } }
+    },
+    "/operations/concierge-requests/{requestId}": {
+      "patch": { "tags": ["Operations"], "summary": "Update a Concierge request", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/RequestId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ManualRequestStatus" } } } }, "responses": { "200": { "description": "Concierge request updated" } } }
+    }
+  },
+  "components": {
+    "securitySchemes": { "bearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "JWT" } },
+    "parameters": {
+      "Page": { "name": "page", "in": "query", "schema": { "type": "integer", "minimum": 1, "default": 1 } },
+      "PerPage": { "name": "perPage", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 } },
+      "DraftId": { "name": "draftId", "in": "path", "required": true, "schema": { "type": "integer" } },
+      "ReservationId": { "name": "reservationId", "in": "path", "required": true, "schema": { "type": "integer" } },
+      "AssignmentId": { "name": "assignmentId", "in": "path", "required": true, "schema": { "type": "integer" } },
+      "ConversationId": { "name": "conversationId", "in": "path", "required": true, "schema": { "type": "integer" } },
+      "PaymentId": { "name": "paymentId", "in": "path", "required": true, "schema": { "type": "integer" } },
+      "DetailId": { "name": "detailId", "in": "path", "required": true, "schema": { "type": "integer" } },
+      "RequestId": { "name": "requestId", "in": "path", "required": true, "schema": { "type": "integer" } },
+      "IdempotencyKey": { "name": "Idempotency-Key", "in": "header", "required": true, "schema": { "type": "string", "maxLength": 191 } },
+      "ServiceCodeQuery": { "name": "serviceCode", "in": "query", "required": true, "schema": { "$ref": "#/components/schemas/InstantServiceCode" } }
+    },
+    "responses": {
+      "Error": { "description": "Error response", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "AuthResponse": { "description": "Authenticated session", "content": { "application/json": { "schema": { "type": "object", "properties": { "user": { "type": "object" }, "tokens": { "$ref": "#/components/schemas/Tokens" } } } } } },
+      "Paginated": { "description": "Paginated collection", "content": { "application/json": { "schema": { "type": "object", "properties": { "items": { "type": "array", "items": { "type": "object" } }, "meta": { "$ref": "#/components/schemas/PaginationMeta" } } } } } }
+    },
+    "schemas": {
+      "Error": { "type": "object", "required": ["error"], "properties": { "error": { "type": "object", "required": ["code", "message"], "properties": { "code": { "type": "string" }, "message": { "type": "string" }, "details": {} } } } },
+      "Tokens": { "type": "object", "properties": { "accessToken": { "type": "string" }, "refreshToken": { "type": "string" }, "expiresIn": { "type": "string", "example": "15m" } } },
+      "ClientRegistration": { "type": "object", "required": ["fullName", "email", "password", "phone"], "properties": { "fullName": { "type": "string" }, "email": { "type": "string", "format": "email" }, "password": { "type": "string", "minLength": 10 }, "phone": { "type": "string" }, "language": { "type": "string", "default": "en" }, "countryId": { "type": "integer" }, "city": { "type": "string" } } },
+      "Login": { "type": "object", "required": ["email", "password"], "properties": { "email": { "type": "string", "format": "email" }, "password": { "type": "string" }, "device": { "type": "object", "properties": { "deviceId": { "type": "string" }, "platform": { "enum": ["IOS", "ANDROID", "WEB"] }, "pushToken": { "type": "string" }, "appVersion": { "type": "string" } } } } },
+      "InstantServiceCode": { "type": "string", "enum": ["CHAUFFEUR", "TRANSFER", "CAR_RENTAL"] },
+      "Location": { "type": "object", "required": ["address", "countryId"], "properties": { "address": { "type": "string" }, "buildingName": { "type": "string" }, "unit": { "type": "string" }, "floor": { "type": "string" }, "instructions": { "type": "string" }, "latitude": { "type": "number" }, "longitude": { "type": "number" }, "countryId": { "type": "integer" }, "cityId": { "type": "integer" }, "city": { "type": "string" } } },
+      "BookingLeg": { "type": "object", "required": ["startAt", "pickup"], "properties": { "startAt": { "type": "string", "format": "date-time" }, "endAt": { "type": "string", "format": "date-time" }, "pickup": { "$ref": "#/components/schemas/Location" }, "dropoff": { "$ref": "#/components/schemas/Location" }, "stops": { "type": "array", "maxItems": 10, "items": { "$ref": "#/components/schemas/Location" } }, "approximateDistanceKm": { "type": "number" }, "isHourly": { "type": "boolean" }, "notes": { "type": "string" } } },
+      "BookingDetails": { "type": "object", "required": ["vehicleClassId", "passenger", "legs"], "properties": { "vehicleClassId": { "type": "integer" }, "passenger": { "type": "object", "required": ["fullName", "phone"], "properties": { "fullName": { "type": "string" }, "email": { "type": "string", "format": "email" }, "phone": { "type": "string" }, "count": { "type": "integer", "default": 1 }, "luggageCount": { "type": "integer", "default": 0 }, "flightNumber": { "type": "string" } } }, "legs": { "type": "array", "minItems": 1, "maxItems": 20, "items": { "$ref": "#/components/schemas/BookingLeg" } }, "options": { "type": "array", "items": { "type": "object", "required": ["optionId"], "properties": { "optionId": { "type": "integer" }, "quantity": { "type": "integer", "default": 1 } } } }, "notes": { "type": "string" } } },
+      "BookingChanges": { "type": "object", "minProperties": 1, "properties": { "vehicleClassId": { "type": "integer" }, "passenger": { "type": "object", "properties": { "fullName": { "type": "string" }, "email": { "type": "string", "format": "email" }, "phone": { "type": "string" }, "count": { "type": "integer" }, "luggageCount": { "type": "integer" }, "flightNumber": { "type": "string" } } }, "legs": { "type": "array", "maxItems": 20, "items": { "type": "object", "required": ["detailId"], "properties": { "detailId": { "type": "integer" }, "startAt": { "type": "string", "format": "date-time" }, "endAt": { "type": "string", "format": "date-time" }, "pickup": { "type": "object" }, "dropoff": { "type": "object", "nullable": true }, "stops": { "type": "array", "items": { "$ref": "#/components/schemas/Location" } }, "approximateDistanceKm": { "type": "number" }, "isHourly": { "type": "boolean" }, "notes": { "type": "string", "nullable": true } } } }, "options": { "type": "array", "items": { "type": "object", "required": ["optionId"], "properties": { "optionId": { "type": "integer" }, "quantity": { "type": "integer" } } } }, "notes": { "type": "string", "nullable": true } } },
+      "VipRequest": { "type": "object", "required": ["airport", "serviceAt", "passengerCount"], "properties": { "customerId": { "type": "integer" }, "airport": { "type": "string" }, "terminal": { "type": "string" }, "serviceAt": { "type": "string", "format": "date-time" }, "passengerCount": { "type": "integer" }, "flightNumber": { "type": "string" }, "requestText": { "type": "string" } } },
+      "ConciergeRequest": { "type": "object", "required": ["category", "requestText"], "properties": { "customerId": { "type": "integer" }, "category": { "type": "string" }, "requestedFor": { "type": "string", "format": "date-time" }, "city": { "type": "string" }, "requestText": { "type": "string" } } },
+      "ManagedClient": { "type": "object", "required": ["fullName", "email", "phone"], "properties": { "fullName": { "type": "string" }, "email": { "type": "string", "format": "email" }, "phone": { "type": "string" }, "language": { "type": "string" }, "countryId": { "type": "integer" }, "city": { "type": "string" }, "preferences": { "type": "object", "additionalProperties": true } } },
+      "AssignmentStatusUpdate": { "type": "object", "required": ["status"], "properties": { "status": { "enum": ["PREPARING", "ON_THE_WAY", "ARRIVED", "WAITING", "PASSENGER_ONBOARD", "IN_SERVICE", "AT_STOP", "DROPOFF_REACHED", "COMPLETED", "NO_SHOW"] }, "note": { "type": "string" }, "latitude": { "type": "number" }, "longitude": { "type": "number" }, "occurredAt": { "type": "string", "format": "date-time" } } },
+      "LocationPing": { "type": "object", "required": ["latitude", "longitude", "recordedAt"], "properties": { "latitude": { "type": "number" }, "longitude": { "type": "number" }, "heading": { "type": "number" }, "speed": { "type": "number" }, "accuracy": { "type": "number" }, "recordedAt": { "type": "string", "format": "date-time" } } },
+      "Expense": { "type": "object", "required": ["category", "amount", "incurredAt"], "properties": { "category": { "enum": ["FUEL", "TOLL", "PARKING", "MAINTENANCE", "OTHER"] }, "amount": { "type": "number" }, "currency": { "type": "string", "default": "EUR" }, "description": { "type": "string" }, "documentId": { "type": "integer" }, "incurredAt": { "type": "string", "format": "date-time" } } },
+      "Incident": { "type": "object", "required": ["type", "severity", "description"], "properties": { "type": { "enum": ["ACCIDENT", "DELAY", "VEHICLE_ISSUE", "PASSENGER_ISSUE", "SAFETY", "OTHER"] }, "severity": { "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"] }, "description": { "type": "string" }, "latitude": { "type": "number" }, "longitude": { "type": "number" }, "documentIds": { "type": "array", "items": { "type": "integer" } } } },
+      "AgencyAgentInvitation": { "type": "object", "required": ["fullName", "email", "phone", "agencyId"], "properties": { "fullName": { "type": "string" }, "email": { "type": "string", "format": "email" }, "phone": { "type": "string" }, "language": { "type": "string", "default": "en" }, "agencyId": { "type": "integer" }, "agentType": { "enum": ["ADMIN", "MEMBER"], "default": "MEMBER" } } },
+      "ChauffeurInvitation": { "type": "object", "required": ["fullName", "email", "phone", "countryId"], "properties": { "fullName": { "type": "string" }, "email": { "type": "string", "format": "email" }, "phone": { "type": "string" }, "language": { "type": "string", "default": "en" }, "countryId": { "type": "integer" }, "cityId": { "type": "integer" }, "providerId": { "type": "integer" } } },
+      "RequestDecision": { "type": "object", "required": ["decision", "resolutionNote"], "properties": { "decision": { "enum": ["APPROVED", "REJECTED"] }, "resolutionNote": { "type": "string" } } },
+      "ManualRequestStatus": { "type": "object", "required": ["status"], "properties": { "status": { "enum": ["IN_REVIEW", "QUOTED", "CONFIRMED", "COMPLETED", "REJECTED", "CANCELLED"] }, "operationsNote": { "type": "string" } } },
+      "PaginationMeta": { "type": "object", "properties": { "page": { "type": "integer" }, "perPage": { "type": "integer" }, "total": { "type": "integer" }, "pages": { "type": "integer" } } }
+    }
+  }
+}

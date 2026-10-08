@@ -1,24 +1,15 @@
 import js from '@eslint/js';
 
 export default [
+  { ignores: ['node_modules/**', 'coverage/**', 'uploads/**'] },
   js.configs.recommended,
   {
-    files: ['src/**/*.js', 'tests/**/*.js', 'scripts/**/*.js'],
+    files: ['**/*.js'],
     languageOptions: {
-      ecmaVersion: 2022,
+      ecmaVersion: 2024,
       sourceType: 'module',
-      globals: {
-        Buffer: 'readonly',
-        console: 'readonly',
-        process: 'readonly',
-        setTimeout: 'readonly',
-        clearTimeout: 'readonly',
-        URL: 'readonly'
-      }
+      globals: { console: 'readonly', process: 'readonly', Buffer: 'readonly', fetch: 'readonly' },
     },
-    rules: {
-      'no-unused-vars': ['warn', { argsIgnorePattern: '^_' }]
-    }
+    rules: { 'no-unused-vars': ['error', { argsIgnorePattern: '^_' }] },
   },
-  { ignores: ['node_modules/**', 'uploads/**', 'coverage/**'] }
 ];

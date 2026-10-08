@@ -1,387 +1,513 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { v4 as uuid } from 'uuid';
+import { asyncHandler } from '../common/async-handler.js';
 import { requireAuth, requireRoles } from '../common/auth.js';
-import { LegacyReservationStatus, LegacyRole, LegacyServiceType } from '../common/legacy.js';
-import { asyncHandler, ok, validate } from '../common/http.js';
-import { badRequest, conflict, forbidden, notFound } from '../common/errors.js';
-import { db, exec, one, rows, transaction } from '../db/pool.js';
+import { conflict, notFound } from '../common/errors.js';
+import { idempotent, storeIdempotencyResponse } from '../common/idempotency.js';
+import { pageResponse, pagination } from '../common/pagination.js';
+import { validate } from '../common/validate.js';
+import { ROLES } from '../config/constants.js';
 import { env } from '../config/env.js';
-import { availableVehicles, calculateQuote } from './catalog.js';
-import { paymentProvider } from '../integrations/payment.js';
-import { notifyUser } from './notifications.js';
-import { beginIdempotency, failIdempotency, finishIdempotency, getIdempotentResponse } from '../common/idempotency.js';
+import { one, query, transaction } from '../db/pool.js';
+import {
+  assertCustomerAccess,
+  getDraftForAccess,
+  getReservationForAccess,
+} from '../services/access.js';
+import {
+  buildDraftQuote,
+  createLegacyReservation,
+  draftFingerprint,
+} from '../services/booking-service.js';
+import { loadBookingView } from '../services/booking-view.js';
+import { createPaymentIntent } from '../services/payment-provider.js';
+
+const router = Router();
+router.use(requireAuth, requireRoles(ROLES.CLIENT, ROLES.AGENCY_AGENT, ROLES.ADMIN, ROLES.STAFF));
+
+const locationSchema = z.object({
+  address: z.string().min(3).max(500),
+  buildingName: z.string().max(191).optional(),
+  unit: z.string().max(50).optional(),
+  floor: z.string().max(50).optional(),
+  instructions: z.string().max(1000).optional(),
+  latitude: z.number().min(-90).max(90).optional(),
+  longitude: z.number().min(-180).max(180).optional(),
+  countryId: z.number().int().positive(),
+  cityId: z.number().int().nonnegative().optional(),
+  city: z.string().max(191).optional(),
+});
+const legSchema = z.object({
+  startAt: z.string().datetime(),
+  endAt: z.string().datetime().optional(),
+  pickup: locationSchema,
+  dropoff: locationSchema.optional(),
+  stops: z.array(locationSchema).max(10).default([]),
+  approximateDistanceKm: z.number().nonnegative().optional(),
+  isHourly: z.boolean().default(false),
+  notes: z.string().max(1000).optional(),
+});
 const detailsSchema = z.object({
-    pickupLocation: z.string().min(2).max(191),
-    dropoffLocation: z.string().max(191).optional().nullable(),
-    pickupDate: z.string().date(),
-    pickupTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/),
-    dropoffDate: z.string().date().optional().nullable(),
-    dropoffTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional().nullable(),
-    pickupCountryId: z.number().int().positive().optional(),
-    dropoffCountryId: z.number().int().positive().optional(),
-    pickupLatitude: z.number().min(-90).max(90).optional(),
-    pickupLongitude: z.number().min(-180).max(180).optional(),
-    pickupPlaceId: z.string().max(255).optional().nullable(),
-    dropoffLatitude: z.number().min(-90).max(90).optional(),
-    dropoffLongitude: z.number().min(-180).max(180).optional(),
-    dropoffPlaceId: z.string().max(255).optional().nullable(),
-    pickupCity: z.string().max(255).optional().nullable(),
-    dropoffCity: z.string().max(255).optional().nullable(),
-    approximateDistance: z.number().nonnegative().optional(),
-    passengers: z.number().int().positive().max(50).optional(),
-    flightNumber: z.string().max(191).optional().nullable(),
-    notes: z.string().max(5000).optional().nullable(),
-    passengerContact: z.object({ name: z.string().min(1).max(191), phone: z.string().max(191), email: z.string().email().max(191) }).optional()
+  vehicleClassId: z.number().int().positive(),
+  passenger: z.object({
+    fullName: z.string().min(2).max(191),
+    email: z.string().email().optional(),
+    phone: z.string().min(6).max(30),
+    count: z.number().int().positive().max(50).default(1),
+    luggageCount: z.number().int().nonnegative().max(100).default(0),
+    flightNumber: z.string().max(40).optional(),
+  }),
+  legs: z.array(legSchema).min(1).max(20),
+  options: z
+    .array(
+      z.object({
+        optionId: z.number().int().positive(),
+        quantity: z.number().int().positive().max(20).default(1),
+      }),
+    )
+    .default([]),
+  notes: z.string().max(2000).optional(),
 });
-const optionsSchema = z.object({
-    vehicleId: z.number().int().positive(),
-    optionIds: z.array(z.number().int().positive()).default([]),
-    insurance: z.enum(['NONE', 'HALF', 'FULL']).default('NONE'),
-    couponCode: z.string().max(191).optional()
-});
-function parseJson(value) {
-    if (value == null)
-        return null;
-    return typeof value === 'string' ? JSON.parse(value) : value;
-}
-async function customerIdForUser(userId) {
-    const customer = await one('SELECT id FROM customers WHERE user_id=? AND deleted_at IS NULL ORDER BY id DESC LIMIT 1', [userId]);
-    if (!customer)
-        throw forbidden('Customer profile is required');
-    return customer.id;
-}
-async function getDraft(id, userId, executor = db) {
-    const row = await one('SELECT * FROM booking_drafts WHERE id=? AND user_id=?', [id, userId], executor);
-    if (!row)
-        throw notFound('Booking draft');
-    return row;
-}
-function dateRange(from, to) {
-    const result = [];
-    let current = new Date(`${from}T00:00:00Z`);
-    const end = new Date(`${to}T00:00:00Z`);
-    while (current <= end) {
-        result.push(current.toISOString().slice(0, 10));
-        current = new Date(current.getTime() + 86400_000);
-    }
-    return result;
-}
-async function generateReservationNo(conn) {
-    for (let i = 0; i < 5; i++) {
-        const candidate = `DLM${Date.now().toString().slice(-8)}${Math.floor(Math.random() * 90 + 10)}`;
-        const found = await one('SELECT id FROM reservations WHERE reservation_no=? LIMIT 1', [candidate], conn);
-        if (!found)
-            return candidate;
-    }
-    return `DLM${uuid().replace(/-/g, '').slice(0, 12).toUpperCase()}`;
-}
-async function addStatusEvent(conn, reservationId, detailId, userId, role, status, note, metadata) {
-    await exec('INSERT INTO reservation_status_events (reservation_id,reservation_details_id,actor_user_id,actor_role,status,note,metadata,occurred_at) VALUES (?,?,?,?,?,?,?,NOW())', [reservationId, detailId, userId, role, status, note ?? null, metadata ? JSON.stringify(metadata) : null], conn);
-}
-export async function bookingView(reservationId, userId) {
-    const booking = await one(`SELECT r.id,r.uuid,r.reservation_no,r.service_type,r.customer_id,r.currency,r.status,r.payment_status,r.payment_method,r.special_note,r.created_at,r.updated_at,
-            rd.id AS reservation_details_id,rd.pick_up_location,rd.drop_off_location,rd.pick_up_date,rd.drop_off_date,rd.pick_up_time,rd.drop_off_time,rd.pick_up_city,rd.drop_off_city,rd.approximate_distance,rd.special_note AS detail_note,
-            rv.vehicle_id,v.title AS vehicle_title,v.model AS vehicle_model,v.reg_no,vc.title AS vehicle_class,
-            rc.base_rate,rc.optional_cost,rc.insurance_cost,rc.total_tax,rc.discount AS cost_discount,rc.total_amount
-       FROM reservations r
-       LEFT JOIN reservation_details rd ON rd.reservation_id=r.id AND rd.deleted_at IS NULL AND rd.status=1
-       LEFT JOIN reservation_vehicles rv ON rv.reservation_id=r.id AND rv.reservation_details_id=rd.id AND rv.deleted_at IS NULL AND rv.status=1
-       LEFT JOIN vehicles v ON v.id=rv.vehicle_id
-       LEFT JOIN vehicle_classes vc ON vc.id=v.vehicle_class_id
-       LEFT JOIN reservation_costs rc ON rc.reservation_id=r.id AND rc.reservation_details_id=rd.id AND rc.status=1
-      WHERE r.id=? AND r.deleted_at IS NULL`, [reservationId]);
-    if (!booking)
-        throw notFound('Booking');
-    if (userId) {
-        const customer = await one('SELECT user_id FROM customers WHERE id=? LIMIT 1', [booking.customer_id]);
-        if (!customer || customer.user_id !== userId)
-            throw forbidden();
-    }
-    const flight = await one('SELECT flight_number,departure_time,arrival_time,terminal FROM reservation_flight_numbers WHERE reservation_id=? ORDER BY id DESC LIMIT 1', [reservationId]);
-    const locations = await rows('SELECT location_type,address,latitude,longitude,place_id FROM mobile_booking_locations WHERE reservation_id=? ORDER BY id', [reservationId]);
-    const events = await rows('SELECT status,note,latitude,longitude,metadata,occurred_at FROM reservation_status_events WHERE reservation_id=? ORDER BY occurred_at,id', [reservationId]);
-    const options = await rows('SELECT rental_option_id,rental_option_text,quantity,amount,total_amount FROM reservation_optional_costs WHERE reservation_id=? AND deleted_at IS NULL AND status=1', [reservationId]);
-    const payments = await rows('SELECT id,provider,provider_payment_id,amount,currency,status,payment_method_type,card_brand,card_last4,created_at,updated_at FROM mobile_payment_transactions WHERE reservation_id=? ORDER BY created_at DESC', [reservationId]);
-    return { ...booking, flight, locations, options, payments, timeline: events };
-}
-async function createReservationFromDraft(draft, userId, paymentMethodType) {
-    const payload = parseJson(draft.draft_json) ?? {};
-    if (!payload.details || !payload.options)
-        throw badRequest('INCOMPLETE_BOOKING_DRAFT', 'Service details and vehicle/options must be completed before checkout');
-    const d = payload.details;
-    const o = payload.options;
-    const dropoffDate = d.dropoffDate ?? d.pickupDate;
-    const dropoffTime = d.dropoffTime ?? d.pickupTime;
-    const pickupCountryId = d.pickupCountryId ?? env.DEFAULT_COUNTRY_ID;
-    const dropoffCountryId = d.dropoffCountryId ?? pickupCountryId;
-    return transaction(async (conn) => {
-        await conn.execute('SELECT id FROM vehicles WHERE id=? FOR UPDATE', [o.vehicleId]);
-        const available = await availableVehicles({ serviceTypeId: draft.service_type_id, pickupDate: d.pickupDate, dropoffDate }, conn);
-        if (!available.some((v) => v.id === o.vehicleId))
-            throw conflict('VEHICLE_NOT_AVAILABLE', 'The selected vehicle is no longer available for the requested dates');
-        const quote = await calculateQuote({
-            serviceTypeId: draft.service_type_id, vehicleId: o.vehicleId, pickupDate: d.pickupDate, dropoffDate,
-            pickupCountryId, approximateDistance: d.approximateDistance, optionIds: o.optionIds, insurance: o.insurance, couponCode: o.couponCode
-        }, conn);
-        const reservationNo = await generateReservationNo(conn);
-        const reservationUuid = uuid();
-        const initialStatus = env.AUTO_CONFIRM_BOOKINGS ? LegacyReservationStatus.CONFIRMED : LegacyReservationStatus.PENDING;
-        const reservation = await exec(`INSERT INTO reservations (uuid,reservation_no,service_type,customer_id,reservation_form,currency,discount,user_id,status,payment_status,payment_method,is_pick_up_and_collection,dev_vehicle_reserved,is_invoice,office_location_id,invoice_office_id,responsible_person_id,created_at,updated_at,special_note,data_sync_to_zoho)
-       VALUES (?,?,?,?,2,?,?,?,?,0,0,0,0,0,1,0,0,NOW(),NOW(),?,0)`, [reservationUuid, reservationNo, draft.service_type_id, draft.customer_id, quote.currency === 'EUR' ? '€' : quote.currency, quote.breakdown.discount, userId, initialStatus, d.notes ?? null], conn);
-        const reservationId = reservation.insertId;
-    //     const detail = await exec(`INSERT INTO reservation_details (reservation_id,is_extra_service,days,is_hourly,approximate_distance,pick_up_location,drop_off_location,pick_up_date,drop_off_date,pick_up_time,drop_off_time,pick_up_country_id,drop_off_country_id,pick_up_city,drop_off_city,pick_up_city_id,drop_off_city_id,service_details,provider_cost,other_cost,status,is_delete_history,created_at,updated_at,special_note)
-    //    VALUES (?,0,?,0,?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,0,NULL,1,0,NOW(),NOW(),?)`, [reservationId, quote.days, d.approximateDistance ?? 1, d.pickupLocation, d.dropoffLocation ?? null, d.pickupDate, dropoffDate, d.pickupTime, dropoffTime, pickupCountryId, dropoffCountryId, d.pickupCity ?? null, d.dropoffCity ?? null, JSON.stringify({ passengers: d.passengers, passengerContact: d.passengerContact }), d.notes ?? null], conn);
-    const detail = await exec(
-  `INSERT INTO reservation_details (
-    reservation_id,
-    is_extra_service,
-    days,
-    is_hourly,
-    approximate_distance,
-    pick_up_location,
-    drop_off_location,
-    pick_up_date,
-    drop_off_date,
-    pick_up_time,
-    drop_off_time,
-    pick_up_country_id,
-    drop_off_country_id,
-    pick_up_city,
-    drop_off_city,
-    pick_up_city_id,
-    drop_off_city_id,
-    service_details,
-    provider_cost,
-    other_cost,
-    status,
-    is_delete_history,
-    created_at,
-    updated_at,
-    special_note
-  )
-  VALUES (
-    ?,0,?,0,?,?,?,?,?,?,?,?,?,?,?,0,0,?,0,NULL,1,0,NOW(),NOW(),?
-  )`,
-  [
-    reservationId,
-    quote.days,
-    d.approximateDistance ?? 1,
-    d.pickupLocation,
-    d.dropoffLocation ?? null,
-    d.pickupDate,
-    dropoffDate,
-    d.pickupTime,
-    dropoffTime,
-    pickupCountryId,
-    dropoffCountryId,
-    d.pickupCity ?? null,
-    d.dropoffCity ?? null,
-    JSON.stringify({
-      passengers: d.passengers ?? null,
-      passengerContact: d.passengerContact ?? null
+
+const bookingChangeSchema = z
+  .object({
+    vehicleClassId: z.number().int().positive().optional(),
+    passenger: detailsSchema.shape.passenger.partial().optional(),
+    legs: z
+      .array(
+        z.object({
+          detailId: z.number().int().positive(),
+          startAt: z.string().datetime().optional(),
+          endAt: z.string().datetime().optional(),
+          pickup: locationSchema.partial().optional(),
+          dropoff: locationSchema.partial().nullable().optional(),
+          stops: z.array(locationSchema).max(10).optional(),
+          approximateDistanceKm: z.number().nonnegative().optional(),
+          isHourly: z.boolean().optional(),
+          notes: z.string().max(1000).nullable().optional(),
+        }),
+      )
+      .max(20)
+      .optional(),
+    options: detailsSchema.shape.options.optional(),
+    notes: z.string().max(2000).nullable().optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, 'At least one booking change is required');
+
+router.post(
+  '/drafts',
+  validate(
+    z.object({
+      serviceCode: z.enum(['CHAUFFEUR', 'TRANSFER', 'CAR_RENTAL']),
+      customerId: z.number().int().positive().optional(),
     }),
-    d.notes ?? null
-  ],
-  conn
-);   
-    const detailId = detail.insertId;
-        await exec(`INSERT INTO reservation_vehicles (reservation_id,reservation_details_id,vehicle_id,pick_up_date,drop_off_date,pick_up_time,drop_off_time,status,user_id,created_at,updated_at)
-       VALUES (?,?,?,?,?,?,?,1,?,NOW(),NOW())`, [reservationId, detailId, o.vehicleId, d.pickupDate, dropoffDate, d.pickupTime, dropoffTime, userId], conn);
-        for (const date of dateRange(d.pickupDate, dropoffDate)) {
-            await exec('INSERT INTO vehicle_reserved_dates (vehicle_id,reservation_id,reservation_detail_id,reserved_date,type,created_at,updated_at) VALUES (?,?,?,?,1,NOW(),NOW())', [o.vehicleId, reservationId, detailId, date], conn);
-        }
-        await exec('INSERT INTO mobile_booking_locations (reservation_id,reservation_details_id,location_type,address,latitude,longitude,place_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,NOW(),NOW())', [reservationId, detailId, 'PICKUP', d.pickupLocation, d.pickupLatitude ?? null, d.pickupLongitude ?? null, d.pickupPlaceId ?? null], conn);
-        if (d.dropoffLocation) {
-            await exec('INSERT INTO mobile_booking_locations (reservation_id,reservation_details_id,location_type,address,latitude,longitude,place_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,NOW(),NOW())', [reservationId, detailId, 'DROPOFF', d.dropoffLocation, d.dropoffLatitude ?? null, d.dropoffLongitude ?? null, d.dropoffPlaceId ?? null], conn);
-        }
-        if (d.flightNumber) {
-            await exec('INSERT INTO reservation_flight_numbers (reservation_id,reservation_details_id,flight_number,created_at,updated_at) VALUES (?,?,?,NOW(),NOW())', [reservationId, detailId, d.flightNumber], conn);
-        }
-        if (d.dropoffLocation) {
-            await exec('INSERT INTO reservation_itineraries (reservation_id,reservation_details_id,reservation_date,full_address,country_id,city,distance,duration,status,sort_numer,created_at,updated_at) VALUES (?,?,?,?,?,?,?,0,1,1,NOW(),NOW())', [reservationId, detailId, d.pickupDate, d.dropoffLocation, dropoffCountryId, d.dropoffCity ?? null, d.approximateDistance ?? 0], conn);
-        }
-        for (const option of quote.options) {
-            await exec(`INSERT INTO reservation_optional_costs (reservation_id,rental_option_id,reservation_details_id,rental_option_text,rent_type,rate_type,quantity,based_on,amount,total_amount,status,user_id,created_at,updated_at)
-         SELECT ?,id,?,?,rent_type,rate_type,?,?,amount,?,1,?,NOW(),NOW() FROM rental_options WHERE id=?`, [reservationId, detailId, option.title, option.quantity, option.basedOn, option.total, userId, option.id], conn);
-        }
-        if (o.insurance !== 'NONE') {
-            await exec(`INSERT INTO reservation_insurances (reservation_id,reservation_details_id,vehicle_id,vehicle_insurance_text,vehicle_insurance_amount,status,user_id,created_at,updated_at)
-         VALUES (?,?,?,?,?,1,?,NOW(),NOW())`, [reservationId, detailId, o.vehicleId, quote.insurance.text ?? o.insurance, quote.insurance.amount, userId], conn);
-        }
-        if (quote.coupon) {
-            await conn.execute('SELECT id FROM discount_coupons WHERE id=? FOR UPDATE', [quote.coupon.id]);
-            await exec('UPDATE reservations SET discount_coupon_id=? WHERE id=?', [quote.coupon.id, reservationId], conn);
-            await exec('INSERT INTO reservation_discounts (reservation_id,reservation_details_id,discount_coupon_id,discount_amount,user_id,created_at,updated_at) VALUES (?,?,?,?,?,NOW(),NOW())', [reservationId, detailId, quote.coupon.id, quote.breakdown.discount, userId], conn);
-            await exec('INSERT INTO reservation_discount_coupons (discount_coupon_id,reservation_id,coupon_value,coupon_type,discount_amount,status,created_at,updated_at) VALUES (?,?,?,?,?,1,NOW(),NOW())', [quote.coupon.id, reservationId, quote.coupon.amount, quote.coupon.deductionType, quote.breakdown.discount], conn);
-            await exec('UPDATE discount_coupons SET use_at=COALESCE(use_at,0)+1,updated_at=NOW() WHERE id=?', [quote.coupon.id], conn);
-        }
-        await exec(`INSERT INTO reservation_costs (reservation_id,reservation_details_id,discount,base_rate,base_tax,optional_cost,one_way_drop_off_charge,car_with_driver_extra_cost,insurance_cost,net_cost,total_tax,total_amount,user_id,status,created_at,updated_at)
-       VALUES (?,?,?,?,0,?,0,0,?,?,?,?,?,1,NOW(),NOW())`, [reservationId, detailId, quote.breakdown.discount, quote.breakdown.baseRate, quote.breakdown.optionalCost, quote.breakdown.insuranceCost, quote.breakdown.netCost, quote.breakdown.totalTax, quote.breakdown.totalAmount, userId], conn);
-        await addStatusEvent(conn, reservationId, detailId, userId, 'CUSTOMER', initialStatus === 1 ? 'CONFIRMED' : 'PENDING_VALIDATION', 'Booking submitted from mobile app');
-        const paymentId = uuid();
-        await exec(`INSERT INTO mobile_payment_transactions (id,reservation_id,user_id,provider,provider_payment_id,amount,currency,status,payment_method_type,created_at,updated_at)
-       VALUES (?,?,?,'pending',NULL,?,?,'REQUIRES_CONFIRMATION',?,NOW(),NOW())`, [paymentId, reservationId, userId, quote.breakdown.totalAmount, quote.currency, paymentMethodType], conn);
-        await exec('UPDATE booking_drafts SET status=\'CHECKED_OUT\',quote_json=?,updated_at=NOW() WHERE id=?', [JSON.stringify(quote), draft.id], conn);
-        return { reservationId, reservationNo, reservationStatus: initialStatus === 1 ? 'CONFIRMED' : 'PENDING_VALIDATION', paymentId, paymentMethodType, quote };
+  ),
+  asyncHandler(async (request, response) => {
+    const customerId =
+      request.auth.role === ROLES.CLIENT ? request.auth.customerId : request.body.customerId;
+    if (!customerId) throw notFound('A client must be selected');
+    await assertCustomerAccess(request.auth, customerId);
+    const result = await query(
+      `INSERT INTO app_booking_drafts
+        (created_by_user_id, created_by_agent_id, customer_id, agency_id, service_code,
+         status, details, revision, expires_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'DRAFT', JSON_OBJECT(), 1, DATE_ADD(NOW(), INTERVAL 24 HOUR), NOW(), NOW())`,
+      [
+        request.auth.userId,
+        request.auth.agentId ?? null,
+        customerId,
+        request.auth.agencyId ?? null,
+        request.body.serviceCode,
+      ],
+    );
+    response.status(201).json({ id: result.insertId, status: 'DRAFT' });
+  }),
+);
+
+router.get(
+  '/drafts/:draftId',
+  asyncHandler(async (request, response) => {
+    const draft = await getDraftForAccess(request.auth, request.params.draftId);
+    response.json({
+      ...draft,
+      details: typeof draft.details === 'string' ? JSON.parse(draft.details) : draft.details,
     });
-}
-export const bookingRouter = Router();
-bookingRouter.use(requireAuth, requireRoles(LegacyRole.CUSTOMER));
-bookingRouter.post('/drafts', asyncHandler(async (req, res) => {
-    const body = validate(z.object({
-        category: z.enum(['CHAUFFEUR', 'CAR_RENTAL']),
-        variant: z.enum(['STANDARD', 'TRANSFER']).optional()
-    }), req.body);
-    const customerId = req.auth.customerId ?? await customerIdForUser(req.auth.userId);
-    const serviceTypeId = body.category === 'CAR_RENTAL' ? LegacyServiceType.CAR_RENTAL : body.variant === 'TRANSFER' ? LegacyServiceType.TRANSFER : LegacyServiceType.CHAUFFEUR;
-    const id = uuid();
-    await exec('INSERT INTO booking_drafts (id,user_id,customer_id,category,service_type_id,draft_json,status,expires_at,created_at,updated_at) VALUES (?,?,?,?,?,JSON_OBJECT(),\'DRAFT\',DATE_ADD(NOW(),INTERVAL 24 HOUR),NOW(),NOW())', [id, req.auth.userId, customerId, body.category, serviceTypeId]);
-    return ok(res, { id, category: body.category, serviceTypeId, status: 'DRAFT' }, 201);
-}));
-bookingRouter.get('/drafts/:id', asyncHandler(async (req, res) => {
-    const draft = await getDraft(req.params.id, req.auth.userId);
-    return ok(res, { ...draft, draft_json: parseJson(draft.draft_json), quote_json: parseJson(draft.quote_json) });
-}));
-bookingRouter.patch('/drafts/:id/details', asyncHandler(async (req, res) => {
-    const body = validate(detailsSchema, req.body);
-    const draft = await getDraft(req.params.id, req.auth.userId);
-    if (draft.status === 'CHECKED_OUT')
-        throw conflict('DRAFT_ALREADY_CHECKED_OUT', 'This draft is already checked out');
-    const payload = parseJson(draft.draft_json) ?? {};
-    payload.details = body;
-    await exec('UPDATE booking_drafts SET draft_json=?,quote_json=NULL,status=\'DRAFT\',updated_at=NOW() WHERE id=?', [JSON.stringify(payload), draft.id]);
-    return ok(res, { id: draft.id, details: body });
-}));
-bookingRouter.patch('/drafts/:id/options', asyncHandler(async (req, res) => {
-    const body = validate(optionsSchema, req.body);
-    const draft = await getDraft(req.params.id, req.auth.userId);
-    if (draft.status === 'CHECKED_OUT')
-        throw conflict('DRAFT_ALREADY_CHECKED_OUT', 'This draft is already checked out');
-    const payload = parseJson(draft.draft_json) ?? {};
-    if (!payload.details)
-        throw badRequest('DETAILS_REQUIRED', 'Complete booking details before selecting a vehicle');
-    payload.options = body;
-    await exec('UPDATE booking_drafts SET draft_json=?,quote_json=NULL,status=\'DRAFT\',updated_at=NOW() WHERE id=?', [JSON.stringify(payload), draft.id]);
-    return ok(res, { id: draft.id, options: body });
-}));
-bookingRouter.post('/drafts/:id/quote', asyncHandler(async (req, res) => {
-    const draft = await getDraft(req.params.id, req.auth.userId);
-    const payload = parseJson(draft.draft_json) ?? {};
-    if (!payload.details || !payload.options)
-        throw badRequest('INCOMPLETE_BOOKING_DRAFT', 'Details and vehicle/options are required');
-    const d = payload.details;
-    const o = payload.options;
-    const quoteInput = {
-        serviceTypeId: draft.service_type_id, vehicleId: o.vehicleId, pickupDate: d.pickupDate, dropoffDate: d.dropoffDate ?? d.pickupDate,
-        pickupCountryId: d.pickupCountryId, approximateDistance: d.approximateDistance, optionIds: o.optionIds, insurance: o.insurance, couponCode: o.couponCode
-    };
-    const quote = await calculateQuote(quoteInput);
-    await exec('UPDATE booking_drafts SET quote_json=?,status=\'QUOTED\',updated_at=NOW() WHERE id=?', [JSON.stringify(quote), draft.id]);
-    return ok(res, quote);
-}));
-bookingRouter.post('/drafts/:id/checkout', asyncHandler(async (req, res) => {
-    const scope = `booking-checkout:${req.params.id}`;
-    const cached = await getIdempotentResponse(req, scope);
-    if (cached)
-        return res.status(cached.status).json(cached.body);
-    await beginIdempotency(req, scope);
+  }),
+);
+
+router.put(
+  '/drafts/:draftId/details',
+  validate(detailsSchema),
+  asyncHandler(async (request, response) => {
+    const draft = await getDraftForAccess(request.auth, request.params.draftId);
+    if (draft.status === 'CHECKED_OUT') throw conflict('Checked-out drafts cannot be changed');
+    await query(
+      `UPDATE app_booking_drafts
+          SET details = ?, status = 'READY', revision = revision + 1,
+              quote_snapshot_id = NULL, updated_at = NOW()
+        WHERE id = ?`,
+      [JSON.stringify(request.body), draft.id],
+    );
+    response.json({ id: draft.id, status: 'READY' });
+  }),
+);
+
+router.post(
+  '/drafts/:draftId/quote',
+  asyncHandler(async (request, response) => {
+    const draft = await getDraftForAccess(request.auth, request.params.draftId);
+    const quote = await buildDraftQuote(draft);
+    const result = await query(
+      `INSERT INTO app_quote_snapshots
+      (draft_id, draft_revision, request_hash, currency, total_amount, quote_data, valid_until, created_at)
+     VALUES (?, ?, ?, 'EUR', ?, ?, DATE_ADD(NOW(), INTERVAL 30 MINUTE), NOW())`,
+      [draft.id, draft.revision, draftFingerprint(draft), quote.total, JSON.stringify(quote)],
+    );
+    await query(
+      "UPDATE app_booking_drafts SET quote_snapshot_id = ?, status = 'QUOTED', updated_at = NOW() WHERE id = ?",
+      [result.insertId, draft.id],
+    );
+    response.json({ quoteId: result.insertId, ...quote });
+  }),
+);
+
+router.post(
+  '/drafts/:draftId/checkout',
+  idempotent('BOOKING_CHECKOUT'),
+  asyncHandler(async (request, response) => {
+    const created = await transaction(async (connection) => {
+      const draft = await getDraftForAccess(request.auth, request.params.draftId, connection, true);
+      if (draft.status === 'CHECKED_OUT') throw conflict('This draft has already been checked out');
+      if (!draft.quote_snapshot_id) throw conflict('Create a quote before checkout');
+      const [quotes] = await connection.execute(
+        `SELECT * FROM app_quote_snapshots
+          WHERE id = ? AND draft_id = ? AND valid_until > NOW() FOR UPDATE`,
+        [draft.quote_snapshot_id, draft.id],
+      );
+      const snapshot = quotes[0];
+      if (
+        !snapshot ||
+        Number(snapshot.draft_revision) !== Number(draft.revision) ||
+        snapshot.request_hash !== draftFingerprint(draft)
+      ) {
+        throw conflict('The quote expired or the draft changed; create a new quote');
+      }
+      const quote =
+        typeof snapshot.quote_data === 'string'
+          ? JSON.parse(snapshot.quote_data)
+          : snapshot.quote_data;
+      const booking = await createLegacyReservation(connection, {
+        draft,
+        quote,
+        auth: request.auth,
+      });
+      await connection.execute(
+        `INSERT INTO app_payment_transactions
+          (reservation_id, user_id, provider, amount, currency, status, idempotency_key, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'EUR', 'CREATED', ?, NOW(), NOW())`,
+        [
+          booking.reservationId,
+          request.auth.userId,
+          env.PAYMENT_PROVIDER,
+          quote.total,
+          request.get('Idempotency-Key') ?? null,
+        ],
+      );
+      const [paymentRows] = await connection.execute('SELECT LAST_INSERT_ID() AS id');
+      await connection.execute(
+        "UPDATE app_booking_drafts SET status = 'CHECKED_OUT', reservation_id = ?, updated_at = NOW() WHERE id = ?",
+        [booking.reservationId, draft.id],
+      );
+      return { ...booking, paymentId: paymentRows[0].id, amount: quote.total };
+    });
+    let payment;
     try {
-        const body = validate(z.object({ paymentMethodType: z.enum(['card', 'apple_pay', 'google_pay', 'mock']).default('mock') }), req.body ?? {});
-        const draft = await getDraft(req.params.id, req.auth.userId);
-        if (draft.status === 'CHECKED_OUT')
-            throw conflict('DRAFT_ALREADY_CHECKED_OUT', 'This draft has already been checked out');
-        const created = await createReservationFromDraft(draft, req.auth.userId, body.paymentMethodType);
-        let payment;
-        try {
-            const intent = await paymentProvider.create({
-                amount: created.quote.breakdown.totalAmount,
-                currency: created.quote.currency,
-                reservationId: created.reservationId,
-                paymentMethodType: body.paymentMethodType
-            });
-            await exec('UPDATE mobile_payment_transactions SET provider=?,provider_payment_id=?,status=?,updated_at=NOW() WHERE id=?', [intent.provider, intent.providerPaymentId, intent.status, created.paymentId]);
-            payment = { id: created.paymentId, ...intent, amount: created.quote.breakdown.totalAmount, currency: created.quote.currency };
-        }
-        catch (providerError) {
-            await exec("UPDATE mobile_payment_transactions SET provider='payment-provider',status='FAILED',failure_reason=?,updated_at=NOW() WHERE id=?", [providerError instanceof Error ? providerError.message : 'Payment provider error', created.paymentId]);
-            payment = { id: created.paymentId, status: 'FAILED', retryAllowed: true, amount: created.quote.breakdown.totalAmount, currency: created.quote.currency };
-        }
-        const result = { reservationId: created.reservationId, reservationNo: created.reservationNo, reservationStatus: created.reservationStatus, payment, quote: created.quote };
-        const response = { success: true, data: result };
-        await finishIdempotency(req, scope, 201, response);
-        await notifyUser(req.auth.userId, 'BOOKING_SUBMITTED', 'Booking submitted', `Reservation ${result.reservationNo} was submitted.`, { reservationId: result.reservationId, status: result.reservationStatus });
-        return res.status(201).json(response);
+      payment = await createPaymentIntent({
+        paymentId: created.paymentId,
+        amount: created.amount,
+        currency: 'EUR',
+        reservationId: created.reservationId,
+      });
+    } catch (error) {
+      payment = { status: 'FAILED', error: 'Payment provider is temporarily unavailable' };
+      await query(
+        `UPDATE app_payment_transactions SET status='FAILED',provider_payload=?,updated_at=NOW() WHERE id=?`,
+        [JSON.stringify({ message: error.message }), created.paymentId],
+      );
     }
-    catch (error) {
-        await failIdempotency(req, scope);
-        throw error;
+    if (payment.providerReference) {
+      await query(
+        'UPDATE app_payment_transactions SET provider_reference = ?, provider_payload = ?, status = ?, updated_at = NOW() WHERE id = ?',
+        [
+          payment.providerReference,
+          JSON.stringify(payment.raw ?? {}),
+          payment.status,
+          created.paymentId,
+        ],
+      );
     }
-}));
-bookingRouter.get('/', asyncHandler(async (req, res) => {
-    const customerId = req.auth.customerId ?? await customerIdForUser(req.auth.userId);
-    const q = validate(z.object({ status: z.enum(['upcoming', 'completed', 'cancelled', 'all']).default('all') }), req.query);
-    let condition = '';
-    if (q.status === 'completed')
-        condition = 'AND r.status=2';
-    if (q.status === 'cancelled')
-        condition = 'AND r.status=3';
-    if (q.status === 'upcoming')
-        condition = 'AND r.status IN (0,1)';
-    const data = await rows(`SELECT r.id,r.reservation_no,r.service_type,r.currency,r.status,r.payment_status,r.created_at,
-            rd.pick_up_location,rd.drop_off_location,rd.pick_up_date,rd.pick_up_time,v.title AS vehicle_title
+    const payload = {
+      bookingId: created.reservationId,
+      reservationNo: created.reservationNo,
+      payment: { id: created.paymentId, ...payment },
+    };
+    await storeIdempotencyResponse(request, 201, payload);
+    response.status(201).json(payload);
+  }),
+);
+
+router.get(
+  '/',
+  asyncHandler(async (request, response) => {
+    const { page, perPage, offset } = pagination(request.query);
+    const clauses = ['r.deleted_at IS NULL'];
+    const params = [];
+    if (request.auth.role === ROLES.CLIENT) {
+      clauses.push('r.customer_id = ?');
+      params.push(request.auth.customerId);
+    }
+    if (request.auth.role === ROLES.AGENCY_AGENT) {
+      clauses.push(
+        `r.customer_id IN (SELECT customer_id FROM app_agent_customer_assignments WHERE agent_id = ? AND status = 'ACTIVE')`,
+      );
+      params.push(request.auth.agentId);
+    }
+    if (request.query.status) {
+      clauses.push('arm.lifecycle_status = ?');
+      params.push(request.query.status);
+    }
+    const where = clauses.join(' AND ');
+    const items = await query(
+      `SELECT r.id, r.reservation_no AS reservationNo, r.customer_id AS customerId,
+            arm.service_code AS serviceCode, arm.lifecycle_status AS status,
+            dates.firstServiceDate, dates.lastServiceDate,
+            costs.totalAmount, arm.currency_code AS currency
        FROM reservations r
-       LEFT JOIN reservation_details rd ON rd.reservation_id=r.id AND rd.deleted_at IS NULL AND rd.status=1
-       LEFT JOIN reservation_vehicles rv ON rv.reservation_id=r.id AND rv.reservation_details_id=rd.id AND rv.deleted_at IS NULL AND rv.status=1
-       LEFT JOIN vehicles v ON v.id=rv.vehicle_id
-      WHERE r.customer_id=? AND r.deleted_at IS NULL ${condition}
-      ORDER BY rd.pick_up_date DESC,r.id DESC LIMIT 200`, [customerId]);
-    return ok(res, data);
-}));
-bookingRouter.get('/:id', asyncHandler(async (req, res) => {
-    return ok(res, await bookingView(Number(req.params.id), req.auth.userId));
-}));
-bookingRouter.patch('/:id', asyncHandler(async (req, res) => {
-    const reservationId = Number(req.params.id);
-    const booking = await bookingView(reservationId, req.auth.userId);
-    if (![LegacyReservationStatus.PENDING, LegacyReservationStatus.CONFIRMED].includes(Number(booking.status)))
-        throw conflict('BOOKING_NOT_MODIFIABLE', 'Only pending or confirmed bookings can be modified');
-    const body = validate(z.object({ pickupLocation: z.string().min(2).max(191).optional(), dropoffLocation: z.string().max(191).nullable().optional(), pickupDate: z.string().date().optional(), pickupTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional(), notes: z.string().max(5000).nullable().optional() }), req.body);
-    if (Object.keys(body).length === 0)
-        throw badRequest('NO_CHANGES', 'No editable fields were provided');
-    const detailId = Number(booking.reservation_details_id);
-    await transaction(async (conn) => {
-        if (body.pickupLocation !== undefined)
-            await exec('UPDATE reservation_details SET pick_up_location=?,updated_at=NOW() WHERE id=?', [body.pickupLocation, detailId], conn);
-        if (body.dropoffLocation !== undefined)
-            await exec('UPDATE reservation_details SET drop_off_location=?,updated_at=NOW() WHERE id=?', [body.dropoffLocation, detailId], conn);
-        if (body.pickupDate !== undefined)
-            await exec('UPDATE reservation_details SET pick_up_date=?,updated_at=NOW() WHERE id=?', [body.pickupDate, detailId], conn);
-        if (body.pickupTime !== undefined)
-            await exec('UPDATE reservation_details SET pick_up_time=?,updated_at=NOW() WHERE id=?', [body.pickupTime, detailId], conn);
-        if (body.notes !== undefined)
-            await exec('UPDATE reservations SET special_note=?,updated_at=NOW(),data_sync_to_zoho=0 WHERE id=?', [body.notes, reservationId], conn);
-        await addStatusEvent(conn, reservationId, detailId, req.auth.userId, 'CUSTOMER', 'BOOKING_MODIFIED', 'Customer modified eligible booking fields', body);
+       JOIN app_reservation_meta arm ON arm.reservation_id = r.id
+       LEFT JOIN (
+         SELECT reservation_id, MIN(pick_up_date) AS firstServiceDate,
+                MAX(drop_off_date) AS lastServiceDate
+           FROM reservation_details WHERE deleted_at IS NULL GROUP BY reservation_id
+       ) dates ON dates.reservation_id = r.id
+       LEFT JOIN (
+         SELECT reservation_id, SUM(total_amount) AS totalAmount
+           FROM reservation_costs WHERE status = 1 GROUP BY reservation_id
+       ) costs ON costs.reservation_id = r.id
+      WHERE ${where}
+      ORDER BY r.created_at DESC LIMIT ? OFFSET ?`,
+      [...params, perPage, offset],
+    );
+    const count = await one(
+      `SELECT COUNT(*) AS total FROM reservations r JOIN app_reservation_meta arm ON arm.reservation_id=r.id WHERE ${where}`,
+      params,
+    );
+    response.json(pageResponse(items, Number(count.total), page, perPage));
+  }),
+);
+
+router.get(
+  '/:reservationId',
+  asyncHandler(async (request, response) => {
+    await getReservationForAccess(request.auth, request.params.reservationId);
+    response.json(await loadBookingView(request.params.reservationId));
+  }),
+);
+
+router.post(
+  '/:reservationId/change-requests',
+  validate(
+    z.object({
+      reason: z.string().min(5).max(2000),
+      requestedChanges: bookingChangeSchema,
+    }),
+  ),
+  asyncHandler(async (request, response) => {
+    const reservation = await getReservationForAccess(request.auth, request.params.reservationId);
+    if (['COMPLETED', 'CANCELLED', 'REJECTED'].includes(reservation.lifecycle_status)) {
+      throw conflict(`A ${reservation.lifecycle_status.toLowerCase()} booking cannot be changed`);
+    }
+    const pending = await one(
+      `SELECT id FROM app_booking_change_requests WHERE reservation_id=? AND status='PENDING'`,
+      [request.params.reservationId],
+    );
+    if (pending) throw conflict('A change request is already pending');
+    const result = await transaction(async (connection) => {
+      const [created] = await connection.execute(
+        `INSERT INTO app_booking_change_requests
+          (reservation_id, requested_by_user_id, status, previous_lifecycle_status, reason, requested_changes, created_at, updated_at)
+         VALUES (?, ?, 'PENDING', ?, ?, ?, NOW(), NOW())`,
+        [
+          request.params.reservationId,
+          request.auth.userId,
+          reservation.lifecycle_status,
+          request.body.reason,
+          JSON.stringify(request.body.requestedChanges),
+        ],
+      );
+      await connection.execute(
+        `UPDATE app_reservation_meta SET lifecycle_status='CHANGE_REQUESTED',updated_at=NOW() WHERE reservation_id=?`,
+        [request.params.reservationId],
+      );
+      await connection.execute(
+        `INSERT INTO app_booking_status_events (reservation_id,status,actor_user_id,note,occurred_at,created_at) VALUES (?,'CHANGE_REQUESTED',?,?,NOW(),NOW())`,
+        [request.params.reservationId, request.auth.userId, request.body.reason],
+      );
+      return created;
     });
-    return ok(res, await bookingView(reservationId, req.auth.userId));
-}));
-bookingRouter.post('/:id/cancel', asyncHandler(async (req, res) => {
-    const reservationId = Number(req.params.id);
-    const booking = await bookingView(reservationId, req.auth.userId);
-    if (Number(booking.status) === LegacyReservationStatus.COMPLETE)
-        throw conflict('BOOKING_ALREADY_COMPLETED', 'Completed bookings cannot be cancelled');
-    if (Number(booking.status) === LegacyReservationStatus.CANCELLED)
-        return ok(res, booking);
-    const body = validate(z.object({ reason: z.string().max(1000).optional() }), req.body ?? {});
-    await transaction(async (conn) => {
-        await exec('UPDATE reservations SET status=3,updated_at=NOW(),data_sync_to_zoho=0 WHERE id=?', [reservationId], conn);
-        await exec('DELETE FROM vehicle_reserved_dates WHERE reservation_id=?', [reservationId], conn);
-        await addStatusEvent(conn, reservationId, Number(booking.reservation_details_id), req.auth.userId, 'CUSTOMER', 'CANCELLED', body.reason ?? 'Cancelled by customer');
+    response.status(201).json({ id: result.insertId, status: 'PENDING' });
+  }),
+);
+
+router.post(
+  '/:reservationId/cancellation-requests',
+  validate(z.object({ reason: z.string().min(5).max(2000) })),
+  asyncHandler(async (request, response) => {
+    const reservation = await getReservationForAccess(request.auth, request.params.reservationId);
+    if (['COMPLETED', 'CANCELLED', 'REJECTED'].includes(reservation.lifecycle_status)) {
+      throw conflict(`A ${reservation.lifecycle_status.toLowerCase()} booking cannot be cancelled`);
+    }
+    const existing = await one(
+      `SELECT id FROM app_booking_cancellation_requests WHERE reservation_id = ? AND status = 'PENDING'`,
+      [request.params.reservationId],
+    );
+    if (existing) throw conflict('A cancellation request is already pending');
+    const result = await transaction(async (connection) => {
+      const [created] = await connection.execute(
+        `INSERT INTO app_booking_cancellation_requests
+          (reservation_id, requested_by_user_id, status, previous_lifecycle_status, reason, created_at, updated_at)
+         VALUES (?, ?, 'PENDING', ?, ?, NOW(), NOW())`,
+        [
+          request.params.reservationId,
+          request.auth.userId,
+          reservation.lifecycle_status,
+          request.body.reason,
+        ],
+      );
+      await connection.execute(
+        `UPDATE app_reservation_meta SET lifecycle_status='CANCELLATION_REQUESTED',updated_at=NOW() WHERE reservation_id=?`,
+        [request.params.reservationId],
+      );
+      await connection.execute(
+        `INSERT INTO app_booking_status_events (reservation_id,status,actor_user_id,note,occurred_at,created_at) VALUES (?,'CANCELLATION_REQUESTED',?,?,NOW(),NOW())`,
+        [request.params.reservationId, request.auth.userId, request.body.reason],
+      );
+      return created;
     });
-    return ok(res, await bookingView(reservationId, req.auth.userId));
-}));
-bookingRouter.get('/:id/receipt', asyncHandler(async (req, res) => {
-    const booking = await bookingView(Number(req.params.id), req.auth.userId);
-    const invoices = await rows('SELECT id,invoice_id,invoice_type,payment_status,note,created_at FROM reservation_invoices WHERE reservation_id=? ORDER BY id DESC', [Number(req.params.id)]);
-    return ok(res, { reservationNo: booking.reservation_no, currency: booking.currency, amount: booking.total_amount, paymentStatus: booking.payment_status, invoices });
-}));
+    response.status(201).json({ id: result.insertId, status: 'PENDING' });
+  }),
+);
+
+router.post(
+  '/vip-requests',
+  validate(
+    z.object({
+      customerId: z.number().int().positive().optional(),
+      airport: z.string().min(2),
+      terminal: z.string().optional(),
+      serviceAt: z.string().datetime(),
+      passengerCount: z.number().int().positive(),
+      flightNumber: z.string().optional(),
+      requestText: z.string().max(3000).optional(),
+    }),
+  ),
+  asyncHandler(async (request, response) => {
+    const customerId =
+      request.auth.role === ROLES.CLIENT ? request.auth.customerId : request.body.customerId;
+    if (!customerId) throw notFound('A client must be selected');
+    await assertCustomerAccess(request.auth, customerId);
+    const result = await query(
+      `INSERT INTO app_vip_requests (customer_id, agency_id, created_by_user_id, airport, terminal, service_at, passenger_count, flight_number, request_text, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'SUBMITTED', NOW(), NOW())`,
+      [
+        customerId,
+        request.auth.agencyId ?? null,
+        request.auth.userId,
+        request.body.airport,
+        request.body.terminal ?? null,
+        request.body.serviceAt.slice(0, 19).replace('T', ' '),
+        request.body.passengerCount,
+        request.body.flightNumber ?? null,
+        request.body.requestText ?? null,
+      ],
+    );
+    response.status(201).json({ id: result.insertId, status: 'SUBMITTED' });
+  }),
+);
+
+router.get(
+  '/manual-requests/vip',
+  asyncHandler(async (request, response) => {
+    const unrestricted = [ROLES.ADMIN, ROLES.STAFF].includes(request.auth.role);
+    const clause = unrestricted
+      ? '1=1'
+      : request.auth.role === ROLES.CLIENT
+        ? 'customer_id=?'
+        : 'agency_id=?';
+    const params = unrestricted
+      ? []
+      : [request.auth.role === ROLES.CLIENT ? request.auth.customerId : request.auth.agencyId];
+    const items = await query(
+      `SELECT id,customer_id AS customerId,airport,terminal,service_at AS serviceAt,
+              passenger_count AS passengerCount,flight_number AS flightNumber,request_text AS requestText,
+              status,operations_note AS operationsNote,created_at AS createdAt
+         FROM app_vip_requests WHERE ${clause} ORDER BY created_at DESC LIMIT 200`,
+      params,
+    );
+    response.json({ items });
+  }),
+);
+
+router.post(
+  '/concierge-requests',
+  validate(
+    z.object({
+      customerId: z.number().int().positive().optional(),
+      category: z.string().min(2).max(100),
+      requestedFor: z.string().datetime().optional(),
+      city: z.string().max(191).optional(),
+      requestText: z.string().min(10).max(5000),
+    }),
+  ),
+  asyncHandler(async (request, response) => {
+    const customerId =
+      request.auth.role === ROLES.CLIENT ? request.auth.customerId : request.body.customerId;
+    if (!customerId) throw notFound('A client must be selected');
+    await assertCustomerAccess(request.auth, customerId);
+    const result = await query(
+      `INSERT INTO app_concierge_requests (customer_id, agency_id, created_by_user_id, category, requested_for, city, request_text, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'SUBMITTED', NOW(), NOW())`,
+      [
+        customerId,
+        request.auth.agencyId ?? null,
+        request.auth.userId,
+        request.body.category,
+        request.body.requestedFor?.slice(0, 19).replace('T', ' ') ?? null,
+        request.body.city ?? null,
+        request.body.requestText,
+      ],
+    );
+    response.status(201).json({ id: result.insertId, status: 'SUBMITTED' });
+  }),
+);
+
+router.get(
+  '/manual-requests/concierge',
+  asyncHandler(async (request, response) => {
+    const unrestricted = [ROLES.ADMIN, ROLES.STAFF].includes(request.auth.role);
+    const clause = unrestricted
+      ? '1=1'
+      : request.auth.role === ROLES.CLIENT
+        ? 'customer_id=?'
+        : 'agency_id=?';
+    const params = unrestricted
+      ? []
+      : [request.auth.role === ROLES.CLIENT ? request.auth.customerId : request.auth.agencyId];
+    const items = await query(
+      `SELECT id,customer_id AS customerId,category,requested_for AS requestedFor,city,
+              request_text AS requestText,status,operations_note AS operationsNote,created_at AS createdAt
+         FROM app_concierge_requests WHERE ${clause} ORDER BY created_at DESC LIMIT 200`,
+      params,
+    );
+    response.json({ items });
+  }),
+);
+
+export default router;

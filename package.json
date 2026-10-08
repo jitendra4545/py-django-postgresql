@@ -1,34 +1,37 @@
 {
-  "name": "drive-luxury-backend",
-  "version": "1.0.0",
+  "name": "drive-luxury-backend-r1",
+  "version": "2.0.0",
   "private": true,
-  "description": "Drive Luxury mobile API integration layer for Client, Chauffeur and Rental Agent apps (JavaScript).",
+  "description": "Drive Luxury Release 1 API for Client, Agency Agent and Chauffeur applications",
+  "type": "module",
   "main": "src/server.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "node --watch src/server.js",
-    "build": "npm run syntax:check",
     "start": "nodemon src/server.js",
     "migrate": "node src/scripts/migrate.js",
-    "seed:test-users": "node src/scripts/seed-test-users.js",
+    "verify:schema": "node src/scripts/verify-legacy-schema.js",
+    "syntax:check": "node scripts/check-syntax.js && node scripts/check-openapi.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "prepare": "husky || true",
-    "verify:schema": "node src/scripts/verify-legacy-schema.js",
     "format:check": "prettier --check .",
-    "syntax:check": "node scripts/check-syntax.js"
+    "build": "npm run syntax:check && npm test"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.891.0",
+    "@aws-sdk/s3-request-presigner": "^3.891.0",
     "bcryptjs": "^3.0.2",
     "compression": "^1.8.1",
     "cors": "^2.8.5",
+    "decimal.js": "^10.6.0",
     "dotenv": "^17.2.2",
+    "expo-server-sdk": "^7.2.0",
     "express": "^5.1.0",
     "express-rate-limit": "^8.1.0",
-    "firebase-admin": "^13.5.0",
-    "google-auth-library": "^10.3.0",
     "helmet": "^8.1.0",
     "ioredis": "^5.7.0",
     "jsonwebtoken": "^9.0.2",
@@ -37,18 +40,20 @@
     "mysql2": "^3.14.5",
     "nodemon": "^3.1.14",
     "socket.io": "^4.8.1",
+    "stripe": "^23.0.0",
     "swagger-ui-express": "^5.0.1",
-    "uuid": "^11.1.0",
+    "uuid": "^11.1.1",
     "winston": "^3.17.0",
     "zod": "^4.1.5"
   },
   "devDependencies": {
     "@eslint/js": "^9.35.0",
     "eslint": "^9.35.0",
-    "husky": "^9.1.7",
     "prettier": "^3.6.2",
     "supertest": "^7.1.4",
-    "vitest": "^3.2.4"
+    "vitest": "^5.0.3"
   },
-  "type": "module"
+  "overrides": {
+    "uuid": "^11.1.1"
+  }
 }

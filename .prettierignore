@@ -1,6 +1,5 @@
-dist
 node_modules
 coverage
 uploads
-*.sql
-postman/*.json
+docs/openapi.json
+package-lock.json

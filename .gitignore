@@ -3,5 +3,5 @@ node_modules/
 uploads/*
 !uploads/.gitkeep
 coverage/
-.DS_Store
 *.log
+.DS_Store

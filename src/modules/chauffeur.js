@@ -1,206 +1,355 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { asyncHandler } from '../common/async-handler.js';
 import { requireAuth, requireRoles } from '../common/auth.js';
-import { LegacyRole, LegacyReservationStatus } from '../common/legacy.js';
-import { asyncHandler, ok, validate } from '../common/http.js';
-import { badRequest, conflict, forbidden, notFound } from '../common/errors.js';
-import { exec, one, rows, transaction } from '../db/pool.js';
-import { notifyUser } from './notifications.js';
-import { emitToReservation, emitToUser } from '../realtime/socket.js';
-import { upload } from '../common/upload.js';
-import { storeBuffer } from '../integrations/storage.js';
-import { env } from '../config/env.js';
-import { beginIdempotency, failIdempotency, finishIdempotency, getIdempotentResponse } from '../common/idempotency.js';
-const statusOrder = ['ASSIGNED', 'ON_THE_WAY', 'ARRIVED', 'CUSTOMER_COLLECTED', 'IN_SERVICE', 'DROP_OFF_REACHED', 'COMPLETED'];
-async function driverId(req) {
-    if (req.auth?.driverId)
-        return req.auth.driverId;
-    const driver = await one('SELECT id FROM drivers WHERE user_id=? AND deleted_at IS NULL ORDER BY id DESC LIMIT 1', [req.auth.userId]);
-    if (!driver)
-        throw forbidden('Driver profile is required');
-    return driver.id;
-}
-async function assignmentFor(reservationId, driver) {
-    const row = await one(`SELECT rdv.reservation_id,rdv.reservation_details_id,r.status AS reservation_status,r.customer_id,
-            ? AS driver_id,rd.pick_up_location,rd.drop_off_location,rd.pick_up_date,rd.pick_up_time,rv.vehicle_id
-       FROM reservation_drivers rdv
-       JOIN reservations r ON r.id=rdv.reservation_id AND r.deleted_at IS NULL
-       JOIN reservation_details rd ON rd.id=rdv.reservation_details_id AND rd.deleted_at IS NULL
-       LEFT JOIN reservation_vehicles rv ON rv.reservation_id=r.id AND rv.reservation_details_id=rd.id AND rv.deleted_at IS NULL AND rv.status=1
-      WHERE rdv.reservation_id=? AND rdv.deleted_at IS NULL AND rdv.status=1
-        AND (rdv.pick_up_driver_id=? OR rdv.drop_off_driver_id=?)
-      ORDER BY rdv.id DESC LIMIT 1`, [driver, reservationId, driver, driver]);
-    if (!row)
-        throw forbidden('This ride is not assigned to the authenticated chauffeur');
-    return row;
-}
-async function latestRideStatus(reservationId) {
-    const row = await one('SELECT checkpoint_type FROM trip_checkpoints WHERE reservation_id=? ORDER BY occurred_at DESC,id DESC LIMIT 1', [reservationId]);
-    return row?.checkpoint_type ?? 'ASSIGNED';
-}
-async function customerUserId(customerId) {
-    const row = await one('SELECT user_id FROM customers WHERE id=? AND deleted_at IS NULL', [customerId]);
-    return row?.user_id ?? null;
-}
-function assertNextStatus(current, next) {
-    if (current === next)
-        return;
-    const currentIndex = statusOrder.indexOf(current);
-    const nextIndex = statusOrder.indexOf(next);
-    if (nextIndex !== currentIndex + 1)
-        throw conflict('INVALID_STATUS_TRANSITION', `Ride status cannot move from ${current} to ${next}`);
-}
-export const chauffeurRouter = Router();
-chauffeurRouter.use(requireAuth, requireRoles(LegacyRole.DRIVER));
-chauffeurRouter.get('/dashboard', asyncHandler(async (req, res) => {
-    const id = await driverId(req);
-    const assignments = await rows(`SELECT r.id AS reservation_id,r.reservation_no,r.status,rd.id AS reservation_details_id,rd.pick_up_date,rd.pick_up_time,rd.pick_up_location,rd.drop_off_location,
-            c.full_name AS customer_name,v.title AS vehicle_title
-       FROM reservation_drivers x
-       JOIN reservations r ON r.id=x.reservation_id AND r.deleted_at IS NULL
-       JOIN reservation_details rd ON rd.id=x.reservation_details_id AND rd.deleted_at IS NULL
-       LEFT JOIN customers c ON c.id=r.customer_id
-       LEFT JOIN reservation_vehicles rv ON rv.reservation_id=r.id AND rv.reservation_details_id=rd.id AND rv.deleted_at IS NULL AND rv.status=1
-       LEFT JOIN vehicles v ON v.id=rv.vehicle_id
-      WHERE x.deleted_at IS NULL AND x.status=1 AND (x.pick_up_driver_id=? OR x.drop_off_driver_id=?)
-        AND r.status IN (0,1)
-      ORDER BY rd.pick_up_date,rd.pick_up_time LIMIT 100`, [id, id]);
-    return ok(res, { driverId: id, assignments });
-}));
-chauffeurRouter.get('/rides', asyncHandler(async (req, res) => {
-    const id = await driverId(req);
-    const data = await rows(`SELECT r.id AS reservation_id,r.reservation_no,r.status,rd.id AS reservation_details_id,rd.pick_up_date,rd.pick_up_time,rd.pick_up_location,rd.drop_off_location,c.full_name AS customer_name
-       FROM reservation_drivers x JOIN reservations r ON r.id=x.reservation_id JOIN reservation_details rd ON rd.id=x.reservation_details_id
-       LEFT JOIN customers c ON c.id=r.customer_id
-      WHERE x.deleted_at IS NULL AND x.status=1 AND (x.pick_up_driver_id=? OR x.drop_off_driver_id=?)
-      ORDER BY rd.pick_up_date DESC,rd.pick_up_time DESC LIMIT 200`, [id, id]);
-    return ok(res, data);
-}));
-chauffeurRouter.get('/rides/:id', asyncHandler(async (req, res) => {
-    const id = await driverId(req);
-    const ride = await assignmentFor(Number(req.params.id), id);
-    const detail = await one(`SELECT r.id,r.reservation_no,r.service_type,r.status,r.special_note,c.full_name AS customer_name,c.phone_no AS customer_phone,
-            rd.*,v.id AS vehicle_id,v.title AS vehicle_title,v.model,v.reg_no
-       FROM reservations r JOIN reservation_details rd ON rd.reservation_id=r.id AND rd.status=1 AND rd.deleted_at IS NULL
-       LEFT JOIN customers c ON c.id=r.customer_id
-       LEFT JOIN reservation_vehicles rv ON rv.reservation_id=r.id AND rv.reservation_details_id=rd.id AND rv.status=1 AND rv.deleted_at IS NULL
-       LEFT JOIN vehicles v ON v.id=rv.vehicle_id WHERE r.id=? LIMIT 1`, [ride.reservation_id]);
-    return ok(res, { ...detail, rideStatus: await latestRideStatus(ride.reservation_id) });
-}));
-chauffeurRouter.post('/rides/:id/start', asyncHandler(async (req, res) => {
-    const id = await driverId(req);
-    const ride = await assignmentFor(Number(req.params.id), id);
-    if (ride.reservation_status !== LegacyReservationStatus.CONFIRMED)
-        throw conflict('BOOKING_NOT_CONFIRMED', 'The booking must be confirmed before the chauffeur can start service');
-    const current = await latestRideStatus(ride.reservation_id);
-    if (current !== 'ASSIGNED')
-        return ok(res, { status: current, alreadyStarted: true });
-    const now = new Date();
-    await transaction(async (conn) => {
-        await exec('INSERT INTO trip_checkpoints (reservation_id,reservation_details_id,driver_id,checkpoint_type,occurred_at,created_at) VALUES (?,?,?,\'ON_THE_WAY\',?,NOW())', [ride.reservation_id, ride.reservation_details_id, id, now], conn);
-        await exec('INSERT INTO reservation_status_events (reservation_id,reservation_details_id,actor_user_id,actor_role,status,note,occurred_at) VALUES (?,?,?,\'DRIVER\',\'ON_THE_WAY\',\'Chauffeur started service\',?)', [ride.reservation_id, ride.reservation_details_id, req.auth.userId, now], conn);
-    });
-    const customerUser = await customerUserId(ride.customer_id);
-    if (customerUser)
-        await notifyUser(customerUser, 'DRIVER_ON_THE_WAY', 'Your chauffeur is on the way', 'Your chauffeur has started heading to the pickup location.', { reservationId: ride.reservation_id });
-    emitToReservation(ride.reservation_id, 'ride.status', { reservationId: ride.reservation_id, status: 'ON_THE_WAY' });
-    return ok(res, { status: 'ON_THE_WAY' });
-}));
-chauffeurRouter.post('/rides/:id/checkpoints', asyncHandler(async (req, res) => {
-    const body = validate(z.object({
-        type: z.enum(['ARRIVED', 'CUSTOMER_COLLECTED', 'IN_SERVICE', 'DROP_OFF_REACHED', 'COMPLETED']),
-        latitude: z.number().min(-90).max(90).optional(), longitude: z.number().min(-180).max(180).optional(), note: z.string().max(1000).optional()
-    }), req.body);
-    const id = await driverId(req);
-    const ride = await assignmentFor(Number(req.params.id), id);
-    const current = await latestRideStatus(ride.reservation_id);
-    assertNextStatus(current, body.type);
-    const now = new Date();
-    await transaction(async (conn) => {
-        await exec('INSERT INTO trip_checkpoints (reservation_id,reservation_details_id,driver_id,checkpoint_type,latitude,longitude,note,occurred_at,created_at) VALUES (?,?,?,?,?,?,?,?,NOW())', [ride.reservation_id, ride.reservation_details_id, id, body.type, body.latitude ?? null, body.longitude ?? null, body.note ?? null, now], conn);
-        await exec('INSERT INTO reservation_status_events (reservation_id,reservation_details_id,actor_user_id,actor_role,status,note,latitude,longitude,occurred_at) VALUES (?,?,?,\'DRIVER\',?,?,?,?,?,?)', [ride.reservation_id, ride.reservation_details_id, req.auth.userId, body.type, body.note ?? null, body.latitude ?? null, body.longitude ?? null, now], conn);
-        if (body.type === 'COMPLETED')
-            await exec('UPDATE reservations SET status=2,updated_at=NOW(),data_sync_to_zoho=0 WHERE id=?', [ride.reservation_id], conn);
-    });
-    const customerUser = await customerUserId(ride.customer_id);
-    if (customerUser)
-        await notifyUser(customerUser, `RIDE_${body.type}`, `Ride update: ${body.type.replaceAll('_', ' ')}`, `Reservation ${ride.reservation_id} is now ${body.type.replaceAll('_', ' ').toLowerCase()}.`, { reservationId: ride.reservation_id, status: body.type });
-    emitToReservation(ride.reservation_id, 'ride.status', { reservationId: ride.reservation_id, status: body.type, latitude: body.latitude, longitude: body.longitude, occurredAt: now.toISOString() });
-    return ok(res, { status: body.type, occurredAt: now.toISOString() });
-}));
-chauffeurRouter.post('/rides/:id/location', asyncHandler(async (req, res) => {
-    const body = validate(z.object({ latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180), accuracy: z.number().nonnegative().optional(), speed: z.number().nonnegative().optional(), heading: z.number().min(0).max(360).optional(), recordedAt: z.string().datetime().optional() }), req.body);
-    const id = await driverId(req);
-    const ride = await assignmentFor(Number(req.params.id), id);
-    const status = await latestRideStatus(ride.reservation_id);
-    if (!['ON_THE_WAY', 'ARRIVED', 'CUSTOMER_COLLECTED', 'IN_SERVICE', 'DROP_OFF_REACHED'].includes(status))
-        throw conflict('GPS_NOT_ALLOWED', `GPS sharing is not allowed while ride status is ${status}`);
-    const recordedAt = body.recordedAt ? new Date(body.recordedAt) : new Date();
-    await exec('INSERT INTO driver_locations (driver_id,reservation_id,reservation_details_id,latitude,longitude,accuracy,speed,heading,recorded_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,NOW())', [id, ride.reservation_id, ride.reservation_details_id, body.latitude, body.longitude, body.accuracy ?? null, body.speed ?? null, body.heading ?? null, recordedAt]);
-    const locationPayload = { reservationId: ride.reservation_id, driverId: id, ...body, recordedAt: recordedAt.toISOString() };
-    emitToReservation(ride.reservation_id, 'ride.location', locationPayload);
-    const customerUser = await customerUserId(ride.customer_id);
-    if (customerUser)
-        emitToUser(customerUser, 'ride.location', locationPayload);
-    return ok(res, { accepted: true, status });
-}));
-chauffeurRouter.get('/rides/:id/locations', asyncHandler(async (req, res) => {
-    const id = await driverId(req);
-    await assignmentFor(Number(req.params.id), id);
-    const data = await rows('SELECT latitude,longitude,accuracy,speed,heading,recorded_at FROM driver_locations WHERE reservation_id=? ORDER BY recorded_at DESC LIMIT 500', [Number(req.params.id)]);
-    return ok(res, data);
-}));
-chauffeurRouter.get('/expense-types', asyncHandler(async (_req, res) => {
-    return ok(res, await rows('SELECT id,code,title FROM expense_types WHERE status=1 ORDER BY id'));
-}));
-chauffeurRouter.post('/rides/:id/expenses', upload.single('receipt'), asyncHandler(async (req, res) => {
-    const scope = `driver-expense:${req.params.id}`;
-    const cached = await getIdempotentResponse(req, scope);
-    if (cached)
-        return res.status(cached.status).json(cached.body);
-    await beginIdempotency(req, scope);
-    try {
-        const body = validate(z.object({ expenseTypeId: z.coerce.number().int().positive(), amount: z.coerce.number().positive(), currency: z.string().max(8).default(env.DEFAULT_CURRENCY), note: z.string().max(2000).optional() }), req.body);
-        const id = await driverId(req);
-        const ride = await assignmentFor(Number(req.params.id), id);
-        const type = await one('SELECT id FROM expense_types WHERE id=? AND status=1', [body.expenseTypeId]);
-        if (!type)
-            throw notFound('Expense type');
-        let receiptPath = null;
-        if (req.file)
-            receiptPath = (await storeBuffer(req.file.buffer, req.file.originalname, req.file.mimetype, `expenses/${id}`)).path;
-        const result = await exec('INSERT INTO driver_expenses (reservation_id,reservation_details_id,driver_id,expense_type_id,amount,currency,receipt_path,note,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,\'SUBMITTED\',NOW(),NOW())', [ride.reservation_id, ride.reservation_details_id, id, body.expenseTypeId, body.amount, body.currency, receiptPath, body.note ?? null]);
-        const response = { success: true, data: { id: result.insertId, reservationId: ride.reservation_id, ...body, receiptPath, status: 'SUBMITTED' } };
-        await finishIdempotency(req, scope, 201, response);
-        return res.status(201).json(response);
+import { conflict, notFound } from '../common/errors.js';
+import { pageResponse, pagination } from '../common/pagination.js';
+import { assertAssignmentTransition } from '../common/state-machine.js';
+import { validate } from '../common/validate.js';
+import { ROLES, TERMINAL_ASSIGNMENT_STATUSES } from '../config/constants.js';
+import { one, query, transaction } from '../db/pool.js';
+import { notifyBookingAudience } from '../services/notifications.js';
+import { emitToUser } from '../services/realtime.js';
+
+const router = Router();
+router.use(requireAuth, requireRoles(ROLES.CHAUFFEUR));
+
+const assignmentFor = async (auth, assignmentId, connection = null, lock = false) => {
+  const executor = connection ?? {
+    execute: (sql, params) => query(sql, params).then((rows) => [rows]),
+  };
+  const [rows] = await executor.execute(
+    `SELECT ada.*, r.reservation_no, rd.pick_up_location, rd.drop_off_location,
+            rd.pick_up_date, rd.pick_up_time, rd.drop_off_date, rd.drop_off_time,
+            r.customer_id, c.full_name AS customer_name,
+            rlm.pickup_details, rlm.dropoff_details, rlm.passenger_count, rlm.luggage_count,
+            rlm.flight_number
+       FROM app_driver_assignments ada
+       JOIN reservations r ON r.id=ada.reservation_id
+       JOIN reservation_details rd ON rd.id=ada.reservation_details_id
+       JOIN app_reservation_leg_meta rlm ON rlm.reservation_details_id=rd.id
+       JOIN customers c ON c.id=r.customer_id
+      WHERE ada.id=? AND ada.driver_id=? ${lock ? 'FOR UPDATE' : ''}`,
+    [assignmentId, auth.driverId],
+  );
+  if (!rows[0]) throw notFound('Assignment not found');
+  return rows[0];
+};
+
+router.get(
+  '/dashboard',
+  asyncHandler(async (request, response) => {
+    const [today, upcoming, summary] = await Promise.all([
+      query(
+        `SELECT ada.id,ada.reservation_id AS reservationId,ada.status,ada.scheduled_start_at AS scheduledStartAt,rd.pick_up_location AS pickupAddress,rd.drop_off_location AS dropoffAddress,c.full_name AS customerName FROM app_driver_assignments ada JOIN reservation_details rd ON rd.id=ada.reservation_details_id JOIN reservations r ON r.id=ada.reservation_id JOIN customers c ON c.id=r.customer_id WHERE ada.driver_id=? AND DATE(ada.scheduled_start_at)=CURRENT_DATE AND ada.status NOT IN ('DECLINED','CANCELLED') ORDER BY ada.scheduled_start_at`,
+        [request.auth.driverId],
+      ),
+      query(
+        `SELECT ada.id,ada.reservation_id AS reservationId,ada.status,ada.scheduled_start_at AS scheduledStartAt,rd.pick_up_location AS pickupAddress FROM app_driver_assignments ada JOIN reservation_details rd ON rd.id=ada.reservation_details_id WHERE ada.driver_id=? AND DATE(ada.scheduled_start_at)>CURRENT_DATE AND ada.status NOT IN ('DECLINED','CANCELLED') ORDER BY ada.scheduled_start_at LIMIT 10`,
+        [request.auth.driverId],
+      ),
+      one(
+        `SELECT COUNT(CASE WHEN status='COMPLETED' AND DATE(updated_at)=CURRENT_DATE THEN 1 END) AS completedToday,COUNT(CASE WHEN status NOT IN ('COMPLETED','DECLINED','CANCELLED','NO_SHOW') AND DATE(scheduled_start_at)=CURRENT_DATE THEN 1 END) AS remainingToday FROM app_driver_assignments WHERE driver_id=?`,
+        [request.auth.driverId],
+      ),
+    ]);
+    response.json({ today, upcoming, summary });
+  }),
+);
+
+router.get(
+  '/assignments/:assignmentId',
+  asyncHandler(async (request, response) => {
+    response.json(await assignmentFor(request.auth, request.params.assignmentId));
+  }),
+);
+
+router.post(
+  '/assignments/:assignmentId/acknowledge',
+  asyncHandler(async (request, response) => {
+    const assignment = await assignmentFor(request.auth, request.params.assignmentId);
+    const changed = assertAssignmentTransition(assignment.status, 'ACKNOWLEDGED');
+    if (changed) {
+      await query(
+        `UPDATE app_driver_assignments SET status='ACKNOWLEDGED',acknowledged_at=NOW(),updated_at=NOW() WHERE id=?`,
+        [assignment.id],
+      );
+      await query(
+        `INSERT INTO app_booking_status_events (reservation_id,reservation_details_id,assignment_id,status,actor_user_id,occurred_at,created_at) VALUES (?,?,?,'ACKNOWLEDGED',?,NOW(),NOW())`,
+        [
+          assignment.reservation_id,
+          assignment.reservation_details_id,
+          assignment.id,
+          request.auth.userId,
+        ],
+      );
     }
-    catch (error) {
-        await failIdempotency(req, scope);
-        throw error;
+    response.json({ id: assignment.id, status: 'ACKNOWLEDGED' });
+  }),
+);
+
+router.post(
+  '/assignments/:assignmentId/decline',
+  validate(z.object({ reason: z.string().min(5).max(1000) })),
+  asyncHandler(async (request, response) => {
+    const assignment = await assignmentFor(request.auth, request.params.assignmentId);
+    assertAssignmentTransition(assignment.status, 'DECLINED');
+    await query(
+      `UPDATE app_driver_assignments SET status='DECLINED',declined_at=NOW(),decline_reason=?,updated_at=NOW() WHERE id=?`,
+      [request.body.reason, assignment.id],
+    );
+    await query(
+      `INSERT INTO app_booking_status_events (reservation_id,reservation_details_id,assignment_id,status,actor_user_id,note,occurred_at,created_at) VALUES (?,?,?,'DECLINED',?,?,NOW(),NOW())`,
+      [
+        assignment.reservation_id,
+        assignment.reservation_details_id,
+        assignment.id,
+        request.auth.userId,
+        request.body.reason,
+      ],
+    );
+    response.json({ id: assignment.id, status: 'DECLINED' });
+  }),
+);
+
+router.post(
+  '/assignments/:assignmentId/status',
+  validate(
+    z.object({
+      status: z.enum([
+        'PREPARING',
+        'ON_THE_WAY',
+        'ARRIVED',
+        'WAITING',
+        'PASSENGER_ONBOARD',
+        'IN_SERVICE',
+        'AT_STOP',
+        'DROPOFF_REACHED',
+        'COMPLETED',
+        'NO_SHOW',
+      ]),
+      note: z.string().max(1000).optional(),
+      latitude: z.number().min(-90).max(90).optional(),
+      longitude: z.number().min(-180).max(180).optional(),
+      occurredAt: z.string().datetime().optional(),
+    }),
+  ),
+  asyncHandler(async (request, response) => {
+    const result = await transaction(async (connection) => {
+      const assignment = await assignmentFor(
+        request.auth,
+        request.params.assignmentId,
+        connection,
+        true,
+      );
+      const changed = assertAssignmentTransition(assignment.status, request.body.status);
+      if (!changed) return assignment;
+      const occurredAt = request.body.occurredAt?.slice(0, 19).replace('T', ' ') ?? null;
+      await connection.execute(
+        `UPDATE app_driver_assignments SET status=?,started_at=IF(?='ON_THE_WAY',COALESCE(started_at,NOW()),started_at),completed_at=IF(?='COMPLETED',NOW(),completed_at),updated_at=NOW() WHERE id=?`,
+        [request.body.status, request.body.status, request.body.status, assignment.id],
+      );
+      await connection.execute(
+        `UPDATE app_reservation_leg_meta SET status=?,updated_at=NOW() WHERE reservation_details_id=?`,
+        [request.body.status, assignment.reservation_details_id],
+      );
+      await connection.execute(
+        `INSERT INTO app_booking_status_events (reservation_id,reservation_details_id,assignment_id,status,actor_user_id,note,latitude,longitude,occurred_at,created_at) VALUES (?,?,?,?,?,?,?,?,COALESCE(?,NOW()),NOW())`,
+        [
+          assignment.reservation_id,
+          assignment.reservation_details_id,
+          assignment.id,
+          request.body.status,
+          request.auth.userId,
+          request.body.note ?? null,
+          request.body.latitude ?? null,
+          request.body.longitude ?? null,
+          occurredAt,
+        ],
+      );
+      const [activeRows] = await connection.execute(
+        `SELECT COUNT(*) AS total FROM app_driver_assignments WHERE reservation_id=? AND status NOT IN ('COMPLETED','NO_SHOW','DECLINED','CANCELLED')`,
+        [assignment.reservation_id],
+      );
+      const reservationStatus =
+        request.body.status === 'COMPLETED' && Number(activeRows[0].total) === 0
+          ? 'COMPLETED'
+          : request.body.status;
+      await connection.execute(
+        `UPDATE app_reservation_meta SET lifecycle_status=?,updated_at=NOW() WHERE reservation_id=?`,
+        [reservationStatus, assignment.reservation_id],
+      );
+      if (reservationStatus === 'COMPLETED')
+        await connection.execute('UPDATE reservations SET status=2,updated_at=NOW() WHERE id=?', [
+          assignment.reservation_id,
+        ]);
+      return { ...assignment, status: request.body.status };
+    });
+    await notifyBookingAudience(result.reservation_id, {
+      type: 'RIDE_STATUS',
+      title: 'Ride status updated',
+      body: `Your service is now ${result.status.toLowerCase().replaceAll('_', ' ')}`,
+      data: {
+        reservationId: result.reservation_id,
+        assignmentId: result.id,
+        status: result.status,
+      },
+    });
+    response.json({ id: result.id, status: result.status });
+  }),
+);
+
+router.post(
+  '/assignments/:assignmentId/location',
+  validate(
+    z.object({
+      latitude: z.number().min(-90).max(90),
+      longitude: z.number().min(-180).max(180),
+      heading: z.number().min(0).max(360).optional(),
+      speed: z.number().nonnegative().max(400).optional(),
+      accuracy: z.number().nonnegative().max(5000).optional(),
+      recordedAt: z.string().datetime(),
+    }),
+  ),
+  asyncHandler(async (request, response) => {
+    const assignment = await assignmentFor(request.auth, request.params.assignmentId);
+    if (TERMINAL_ASSIGNMENT_STATUSES.includes(assignment.status) || assignment.status === 'OFFERED')
+      throw conflict('Location sharing is not active for this assignment');
+    const recordedAt = new Date(request.body.recordedAt);
+    if (
+      recordedAt > new Date(Date.now() + 5 * 60_000) ||
+      recordedAt < new Date(Date.now() - 24 * 60 * 60_000)
+    )
+      throw conflict('Location timestamp is outside the accepted range');
+    await query(
+      `INSERT INTO app_driver_locations (assignment_id,driver_id,latitude,longitude,heading,speed,accuracy,recorded_at,created_at) VALUES (?,?,?,?,?,?,?,?,NOW())`,
+      [
+        assignment.id,
+        request.auth.driverId,
+        request.body.latitude,
+        request.body.longitude,
+        request.body.heading ?? null,
+        request.body.speed ?? null,
+        request.body.accuracy ?? null,
+        request.body.recordedAt.slice(0, 19).replace('T', ' '),
+      ],
+    );
+    const viewers = await query(
+      `SELECT DISTINCT u.id AS userId
+         FROM reservations r JOIN customers c ON c.id=r.customer_id JOIN users u ON u.id=c.user_id
+        WHERE r.id=?
+       UNION
+       SELECT DISTINCT a.user_id
+         FROM reservations r JOIN app_agent_customer_assignments aca ON aca.customer_id=r.customer_id AND aca.status='ACTIVE'
+         JOIN agents a ON a.id=aca.agent_id WHERE r.id=?`,
+      [assignment.reservation_id, assignment.reservation_id],
+    );
+    for (const viewer of viewers) {
+      emitToUser(viewer.userId, 'assignment.location', {
+        assignmentId: assignment.id,
+        reservationId: assignment.reservation_id,
+        ...request.body,
+      });
     }
-}));
-chauffeurRouter.get('/expenses', asyncHandler(async (req, res) => {
-    const id = await driverId(req);
-    const data = await rows(`SELECT e.*,t.code,t.title FROM driver_expenses e JOIN expense_types t ON t.id=e.expense_type_id WHERE e.driver_id=? ORDER BY e.created_at DESC LIMIT 200`, [id]);
-    return ok(res, data);
-}));
-chauffeurRouter.get('/history', asyncHandler(async (req, res) => {
-    const id = await driverId(req);
-    const data = await rows(`SELECT r.id AS reservation_id,r.reservation_no,rd.pick_up_date,rd.pick_up_location,rd.drop_off_location,r.status,
-            COALESCE(x.pick_up_driver_cost,0)+COALESCE(x.drop_off_driver_cost,0) AS legacy_earnings
-       FROM reservation_drivers x JOIN reservations r ON r.id=x.reservation_id JOIN reservation_details rd ON rd.id=x.reservation_details_id
-      WHERE (x.pick_up_driver_id=? OR x.drop_off_driver_id=?) AND r.status=2 ORDER BY rd.pick_up_date DESC LIMIT 200`, [id, id]);
-    return ok(res, { rides: data, earningsRule: 'Displayed from legacy reservation_drivers costs. The client specification leaves final earnings rules TBC.' });
-}));
-chauffeurRouter.get('/documents', asyncHandler(async (req, res) => {
-    const id = await driverId(req);
-    return ok(res, await rows('SELECT id,file_name,file_path,created_at,updated_at FROM driver_files WHERE driver_id=? ORDER BY id DESC', [id]));
-}));
-chauffeurRouter.post('/documents', upload.single('file'), asyncHandler(async (req, res) => {
-    if (!req.file)
-        throw badRequest('FILE_REQUIRED', 'A file is required');
-    const id = await driverId(req);
-    const stored = await storeBuffer(req.file.buffer, req.file.originalname, req.file.mimetype, `driver-documents/${id}`);
-    const result = await exec('INSERT INTO driver_files (driver_id,file_name,file_path,created_at,updated_at) VALUES (?,?,?,NOW(),NOW())', [id, req.file.originalname, stored.path]);
-    return ok(res, { id: result.insertId, fileName: req.file.originalname, filePath: stored.path }, 201);
-}));
+    response.status(202).json({ accepted: true });
+  }),
+);
+
+router.post(
+  '/assignments/:assignmentId/expenses',
+  validate(
+    z.object({
+      category: z.enum(['FUEL', 'TOLL', 'PARKING', 'MAINTENANCE', 'OTHER']),
+      amount: z.number().positive(),
+      currency: z.string().length(3).default('EUR'),
+      description: z.string().max(1000).optional(),
+      documentId: z.number().int().positive().optional(),
+      incurredAt: z.string().datetime(),
+    }),
+  ),
+  asyncHandler(async (request, response) => {
+    const assignment = await assignmentFor(request.auth, request.params.assignmentId);
+    const result = await query(
+      `INSERT INTO app_driver_expenses (assignment_id,reservation_id,driver_id,category,amount,currency,description,document_id,status,incurred_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?, 'SUBMITTED',?,NOW(),NOW())`,
+      [
+        assignment.id,
+        assignment.reservation_id,
+        request.auth.driverId,
+        request.body.category,
+        request.body.amount,
+        request.body.currency,
+        request.body.description ?? null,
+        request.body.documentId ?? null,
+        request.body.incurredAt.slice(0, 19).replace('T', ' '),
+      ],
+    );
+    response.status(201).json({ id: result.insertId, status: 'SUBMITTED' });
+  }),
+);
+
+router.post(
+  '/assignments/:assignmentId/incidents',
+  validate(
+    z.object({
+      type: z.enum(['ACCIDENT', 'DELAY', 'VEHICLE_ISSUE', 'PASSENGER_ISSUE', 'SAFETY', 'OTHER']),
+      severity: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']),
+      description: z.string().min(10).max(5000),
+      latitude: z.number().min(-90).max(90).optional(),
+      longitude: z.number().min(-180).max(180).optional(),
+      documentIds: z.array(z.number().int().positive()).max(10).default([]),
+    }),
+  ),
+  asyncHandler(async (request, response) => {
+    const assignment = await assignmentFor(request.auth, request.params.assignmentId);
+    const result = await query(
+      `INSERT INTO app_incidents (assignment_id,reservation_id,reported_by_user_id,type,severity,description,latitude,longitude,document_ids,status,reported_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,'OPEN',NOW(),NOW(),NOW())`,
+      [
+        assignment.id,
+        assignment.reservation_id,
+        request.auth.userId,
+        request.body.type,
+        request.body.severity,
+        request.body.description,
+        request.body.latitude ?? null,
+        request.body.longitude ?? null,
+        JSON.stringify(request.body.documentIds),
+      ],
+    );
+    await notifyBookingAudience(assignment.reservation_id, {
+      type: 'INCIDENT',
+      title: 'Service incident reported',
+      body: 'Operations has been notified about an incident.',
+      data: { reservationId: assignment.reservation_id, incidentId: result.insertId },
+    });
+    response.status(201).json({ id: result.insertId, status: 'OPEN' });
+  }),
+);
+
+router.get(
+  '/history',
+  asyncHandler(async (request, response) => {
+    const { page, perPage, offset } = pagination(request.query);
+    const items = await query(
+      `SELECT ada.id,ada.reservation_id AS reservationId,ada.status,ada.scheduled_start_at AS scheduledStartAt,ada.completed_at AS completedAt,rd.pick_up_location AS pickupAddress,rd.drop_off_location AS dropoffAddress,(COALESCE(rdv.pick_up_driver_cost,0)+COALESCE(rdv.drop_off_driver_cost,0)) AS earnings FROM app_driver_assignments ada JOIN reservation_details rd ON rd.id=ada.reservation_details_id LEFT JOIN reservation_drivers rdv ON rdv.id=ada.legacy_reservation_driver_id WHERE ada.driver_id=? AND ada.status IN ('COMPLETED','NO_SHOW','CANCELLED') ORDER BY ada.updated_at DESC LIMIT ? OFFSET ?`,
+      [request.auth.driverId, perPage, offset],
+    );
+    const total = await one(
+      `SELECT COUNT(*) AS total FROM app_driver_assignments WHERE driver_id=? AND status IN ('COMPLETED','NO_SHOW','CANCELLED')`,
+      [request.auth.driverId],
+    );
+    response.json(pageResponse(items, Number(total.total), page, perPage));
+  }),
+);
+
+router.get(
+  '/documents',
+  asyncHandler(async (request, response) => {
+    const items = await query(
+      `SELECT id,category,original_name AS name,mime_type AS mimeType,expires_at AS expiresAt,created_at AS createdAt FROM app_documents WHERE owner_user_id=? AND deleted_at IS NULL ORDER BY created_at DESC`,
+      [request.auth.userId],
+    );
+    response.json({ items });
+  }),
+);
+
+export default router;

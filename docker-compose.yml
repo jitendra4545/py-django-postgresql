@@ -1,11 +1,23 @@
 services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: drive_luxury
+      MYSQL_ROOT_PASSWORD: local-root-password
+    ports:
+      - '3306:3306'
+    volumes:
+      - drive_luxury_mysql:/var/lib/mysql
+    healthcheck:
+      test: ['CMD', 'mysqladmin', 'ping', '-h', 'localhost', '-plocal-root-password']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
-    command: redis-server --appendonly yes
-    volumes:
-      - drive_luxury_redis:/data
+      - '6379:6379'
 
 volumes:
-  drive_luxury_redis:
+  drive_luxury_mysql:

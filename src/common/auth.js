@@ -1,67 +1,73 @@
-import jwt from 'jsonwebtoken';
-import { env } from '../config/env.js';
-import { LegacyRole, roleName } from './legacy.js';
-import { unauthorized, forbidden } from './errors.js';
+import { AppError, forbidden } from './errors.js';
 import { one } from '../db/pool.js';
-export function signAccessToken(userId, role) {
-    return jwt.sign({ sub: String(userId), role, type: 'access' }, env.JWT_ACCESS_SECRET, {
-        expiresIn: env.JWT_ACCESS_TTL
-    });
-}
-export function signRefreshToken(userId, role) {
-    return jwt.sign({ sub: String(userId), role, type: 'refresh' }, env.JWT_REFRESH_SECRET, {
-        expiresIn: `${env.JWT_REFRESH_TTL_DAYS}d`
-    });
-}
-export function verifyRefreshToken(token) {
-    const payload = jwt.verify(token, env.JWT_REFRESH_SECRET);
-    if (payload.type !== 'refresh')
-        throw unauthorized('Invalid refresh token');
-    return payload;
-}
-async function hydrate(userId, role) {
-    const context = { userId, role: role, roleName: roleName(role) };
-    if (role === LegacyRole.CUSTOMER) {
-        const row = await one('SELECT id FROM customers WHERE user_id=? AND deleted_at IS NULL ORDER BY id DESC LIMIT 1', [userId]);
-        if (row)
-            context.customerId = row.id;
-    }
-    if (role === LegacyRole.DRIVER) {
-        const row = await one('SELECT id FROM drivers WHERE user_id=? AND deleted_at IS NULL ORDER BY id DESC LIMIT 1', [userId]);
-        if (row)
-            context.driverId = row.id;
-    }
-    if (role === LegacyRole.AGENT) {
-        const row = await one('SELECT id FROM agents WHERE user_id=? AND deleted_at IS NULL ORDER BY id DESC LIMIT 1', [userId]);
-        if (row)
-            context.agentId = row.id;
-    }
-    return context;
-}
-export async function requireAuth(req, _res, next) {
-    try {
-        const auth = req.headers.authorization;
-        if (!auth?.startsWith('Bearer '))
-            throw unauthorized();
-        const token = auth.slice(7);
-        const payload = jwt.verify(token, env.JWT_ACCESS_SECRET);
-        if (payload.type !== 'access')
-            throw unauthorized('Invalid access token');
-        req.auth = await hydrate(Number(payload.sub), payload.role);
-        next();
-    }
-    catch (error) {
-        if (error instanceof Error && error.name === 'TokenExpiredError')
-            return next(unauthorized('Access token expired'));
-        if (error instanceof Error && error.name === 'JsonWebTokenError')
-            return next(unauthorized('Invalid access token'));
-        next(error);
-    }
-}
-export const requireRoles = (...roles) => (req, _res, next) => {
-    if (!req.auth)
-        return next(unauthorized());
-    if (!roles.includes(req.auth.role))
-        return next(forbidden());
-    next();
+import { verifyAccessToken } from '../services/tokens.js';
+
+const bearerToken = (request) => {
+  const value = request.get('authorization');
+  return value?.startsWith('Bearer ') ? value.slice(7) : null;
 };
+
+export const requireAuth = async (request, _response, next) => {
+  try {
+    const token = bearerToken(request);
+    if (!token) throw new AppError(401, 'UNAUTHENTICATED', 'Authentication is required');
+    const payload = verifyAccessToken(token);
+    const user = await one(
+      `SELECT id, user_name, full_name, email, role, lang
+         FROM users
+        WHERE id = ? AND status = 0 AND deleted_at IS NULL`,
+      [payload.sub],
+    );
+    if (!user || Number(user.role) !== Number(payload.role)) {
+      throw new AppError(401, 'SESSION_INVALID', 'The account or session is no longer active');
+    }
+
+    const profile = await loadRoleProfile(user);
+    request.auth = {
+      userId: user.id,
+      role: Number(user.role),
+      user,
+      ...profile,
+    };
+    next();
+  } catch (error) {
+    if (error instanceof AppError) return next(error);
+    return next(new AppError(401, 'TOKEN_INVALID', 'The access token is invalid or expired'));
+  }
+};
+
+const loadRoleProfile = async (user) => {
+  if (Number(user.role) === 5) {
+    const customer = await one(
+      'SELECT id, agency_id FROM customers WHERE user_id = ? AND deleted_at IS NULL',
+      [user.id],
+    );
+    return { customerId: customer?.id ?? null, agencyId: customer?.agency_id ?? null };
+  }
+  if (Number(user.role) === 4) {
+    const agent = await one(
+      `SELECT a.id, a.agency_id, a.agent_type
+         FROM agents a
+         JOIN agencies ag ON ag.id = a.agency_id AND ag.deleted_at IS NULL AND ag.status = 1
+        WHERE a.user_id = ? AND a.deleted_at IS NULL`,
+      [user.id],
+    );
+    if (!agent) throw forbidden('The agency agent profile is inactive');
+    return { agentId: agent.id, agencyId: agent.agency_id, agentType: agent.agent_type };
+  }
+  if (Number(user.role) === 3) {
+    const driver = await one('SELECT id FROM drivers WHERE user_id = ? AND deleted_at IS NULL', [
+      user.id,
+    ]);
+    if (!driver) throw forbidden('The chauffeur profile is inactive');
+    return { driverId: driver.id };
+  }
+  return {};
+};
+
+export const requireRoles =
+  (...roles) =>
+  (request, _response, next) => {
+    if (!roles.includes(request.auth.role)) return next(forbidden());
+    return next();
+  };
