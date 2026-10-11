@@ -19,7 +19,9 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "build": "npm run syntax:check && npm test"
+    "build": "npm run syntax:check && npm test",
+    "seed:admin": "node scripts/seed-admin.js",
+    "seed:chauffeur-demo": "node scripts/seed-chauffeur-demo-bookings.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.891.0",
