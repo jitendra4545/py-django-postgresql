@@ -23,6 +23,7 @@ import { errorHandler, notFoundHandler } from './middleware/error-handler.js';
 
 const openapi = JSON.parse(readFileSync(new URL('../docs/openapi.json', import.meta.url), 'utf8'));
 const app = express();
+app.set('trust proxy', 1);
 
 app.disable('x-powered-by');
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'same-site' } }));
