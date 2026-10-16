@@ -2,6 +2,7 @@ import Decimal from 'decimal.js';
 import { AppError } from '../common/errors.js';
 import { calculateQuote } from './pricing.js';
 import { syncAgencyCommissions } from './commission-service.js';
+import { hasAvailableVehicle } from './vehicle-availability.js';
 
 const parseJson = (value, fallback = {}) => {
   if (!value) return fallback;
@@ -96,15 +97,32 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
     if (new Date(endAt) < new Date(startAt)) {
       throw new AppError(422, 'INVALID_BOOKING_DATES', 'Leg end must be after its start');
     }
-    if (
+    const inventoryChanged = Boolean(
       requested.startAt ||
       requested.endAt ||
       requested.pickup ||
       Object.hasOwn(requested, 'dropoff') ||
-      Number(vehicleClassId) !== Number(row.vehicle_class_id)
+      Number(vehicleClassId) !== Number(row.vehicle_class_id),
+    );
+    if (
+      inventoryChanged &&
+      !(await hasAvailableVehicle({
+        vehicleClassId,
+        countryId: pickup.countryId,
+        cityId: pickup.cityId,
+        startAt,
+        endAt,
+        connection,
+        excludeReservationDetailId: row.id,
+      }))
     ) {
-      requiresReassignment = true;
+      throw new AppError(
+        409,
+        'VEHICLE_UNAVAILABLE',
+        `No available vehicle remains for booking leg ${row.id}`,
+      );
     }
+    if (inventoryChanged) requiresReassignment = true;
 
     await connection.execute(
       `UPDATE reservation_details

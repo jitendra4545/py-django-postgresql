@@ -4,12 +4,25 @@ import { asyncHandler } from '../common/async-handler.js';
 import { requireAuth, requireRoles } from '../common/auth.js';
 import { validate } from '../common/validate.js';
 import { ROLES } from '../config/constants.js';
-import { one, query } from '../db/pool.js';
+import { one, query, transaction } from '../db/pool.js';
 import { getReservationForAccess } from '../services/access.js';
 import { loadBookingView } from '../services/booking-view.js';
+import { updateProfileTable } from '../services/profile-updates.js';
 
 const router = Router();
 router.use(requireAuth, requireRoles(ROLES.CLIENT));
+
+const loadClientProfile = (customerId) =>
+  one(
+    `SELECT c.id,c.title,c.full_name AS fullName,c.last_name AS lastName,
+            COALESCE(c.email,u.email) AS email,c.phone_no AS phone,
+            c.date_of_birth AS dateOfBirth,c.country_id AS countryId,c.city,c.state,
+            c.zip_code AS zipCode,c.address_one AS addressOne,c.address_two AS addressTwo,
+            COALESCE(c.photo,u.photo) AS photo,u.lang AS language
+       FROM customers c JOIN users u ON u.id=c.user_id
+      WHERE c.id=? AND c.deleted_at IS NULL`,
+    [customerId],
+  );
 
 router.get(
   '/dashboard',
@@ -49,57 +62,61 @@ router.get(
 router.get(
   '/profile',
   asyncHandler(async (request, response) => {
-    const profile = await one(
-      `SELECT c.id, c.full_name AS fullName, c.email, c.phone_no AS phone,
-            c.country_id AS countryId, c.city, c.state, c.zip_code AS zipCode,
-            c.address_one AS addressOne, c.address_two AS addressTwo,
-            u.photo, u.lang AS language
-       FROM customers c JOIN users u ON u.id=c.user_id WHERE c.id=? AND c.deleted_at IS NULL`,
-      [request.auth.customerId],
-    );
-    response.json(profile);
+    response.json(await loadClientProfile(request.auth.customerId));
   }),
 );
 
 router.patch(
   '/profile',
   validate(
-    z.object({
-      fullName: z.string().min(2).max(191).optional(),
-      phone: z.string().min(6).max(30).optional(),
-      countryId: z.number().int().positive().nullable().optional(),
-      city: z.string().max(191).nullable().optional(),
-      state: z.string().max(191).nullable().optional(),
-      zipCode: z.string().max(50).nullable().optional(),
-      addressOne: z.string().max(191).nullable().optional(),
-      addressTwo: z.string().max(191).nullable().optional(),
-      language: z.string().min(2).max(10).optional(),
-    }),
+    z
+      .object({
+        title: z.string().max(191).nullable().optional(),
+        fullName: z.string().min(2).max(191).optional(),
+        lastName: z.string().max(255).nullable().optional(),
+        phone: z.string().min(6).max(30).optional(),
+        dateOfBirth: z
+          .string()
+          .regex(/^\d{4}-\d{2}-\d{2}$/)
+          .nullable()
+          .optional(),
+        countryId: z.number().int().positive().nullable().optional(),
+        city: z.string().max(191).nullable().optional(),
+        state: z.string().max(191).nullable().optional(),
+        zipCode: z.string().max(50).nullable().optional(),
+        addressOne: z.string().max(191).nullable().optional(),
+        addressTwo: z.string().max(191).nullable().optional(),
+        language: z.string().min(2).max(10).optional(),
+      })
+      .refine((value) => Object.keys(value).length > 0, {
+        message: 'At least one profile field is required',
+      }),
   ),
   asyncHandler(async (request, response) => {
     const b = request.body;
-    await query(
-      `UPDATE customers SET full_name=COALESCE(?,full_name), phone_no=COALESCE(?,phone_no),
-        country_id=COALESCE(?,country_id), city=COALESCE(?,city), state=COALESCE(?,state),
-        zip_code=COALESCE(?,zip_code), address_one=COALESCE(?,address_one),
-        address_two=COALESCE(?,address_two), updated_at=NOW() WHERE id=?`,
-      [
-        b.fullName,
-        b.phone,
-        b.countryId,
-        b.city,
-        b.state,
-        b.zipCode,
-        b.addressOne,
-        b.addressTwo,
-        request.auth.customerId,
-      ],
-    );
-    await query(
-      'UPDATE users SET full_name=COALESCE(?,full_name), lang=COALESCE(?,lang), updated_at=NOW() WHERE id=?',
-      [b.fullName, b.language, request.auth.userId],
-    );
-    response.json({ message: 'Profile updated' });
+    await transaction(async (connection) => {
+      await updateProfileTable(connection, 'customers', request.auth.customerId, b, {
+        title: 'title',
+        fullName: 'full_name',
+        lastName: 'last_name',
+        phone: 'phone_no',
+        dateOfBirth: 'date_of_birth',
+        countryId: 'country_id',
+        city: 'city',
+        state: 'state',
+        zipCode: 'zip_code',
+        addressOne: 'address_one',
+        addressTwo: 'address_two',
+      });
+      await updateProfileTable(connection, 'users', request.auth.userId, b, {
+        fullName: 'full_name',
+        language: 'lang',
+      });
+    });
+    response.json({
+      message: 'Profile updated',
+      profile: await loadClientProfile(request.auth.customerId),
+    });
   }),
 );
 

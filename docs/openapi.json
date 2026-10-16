@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Drive Luxury Release 1 API",
-    "version": "2.0.0",
+    "version": "2.1.0",
     "description": "API contract for the Client + Agency Agent application, Chauffeur application, and back-office integration. Rental inspection and AI features are intentionally outside Release 1."
   },
   "servers": [{ "url": "/api/v1", "description": "Current server" }],
@@ -26,6 +26,9 @@
     "/auth/login": {
       "post": { "tags": ["Authentication"], "summary": "Log in any active app user", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Login" } } } }, "responses": { "200": { "$ref": "#/components/responses/AuthResponse" }, "401": { "$ref": "#/components/responses/Error" } } }
     },
+    "/auth/google": {
+      "post": { "tags": ["Authentication"], "summary": "Log in with a verified Google ID token", "description": "Existing active Client, Agency Agent and Chauffeur accounts are matched by their verified email and permanently linked to the Google subject. A new Google identity may create a Client account only; phone is required for first-time Client registration.", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GoogleLogin" } } } }, "responses": { "200": { "$ref": "#/components/responses/AuthResponse" }, "201": { "$ref": "#/components/responses/AuthResponse" }, "401": { "$ref": "#/components/responses/Error" }, "422": { "$ref": "#/components/responses/Error" }, "503": { "$ref": "#/components/responses/Error" } } }
+    },
     "/auth/refresh": {
       "post": { "tags": ["Authentication"], "summary": "Rotate a refresh token", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["refreshToken"], "properties": { "refreshToken": { "type": "string" } } } } } }, "responses": { "200": { "$ref": "#/components/responses/AuthResponse" }, "401": { "$ref": "#/components/responses/Error" } } }
     },
@@ -36,10 +39,10 @@
       "get": { "tags": ["Authentication"], "summary": "Get the current user and role profile", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Current user" }, "401": { "$ref": "#/components/responses/Error" } } }
     },
     "/auth/password/forgot": {
-      "post": { "tags": ["Authentication"], "summary": "Request password reset", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["email"], "properties": { "email": { "type": "string", "format": "email" } } } } } }, "responses": { "200": { "description": "Request accepted" } } }
+      "post": { "tags": ["Authentication"], "summary": "Request password reset email", "description": "Returns a neutral response whether or not an account exists. For an active account, a single-use 30-minute reset link is sent through configured SMTP.", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["email"], "properties": { "email": { "type": "string", "format": "email" } } } } } }, "responses": { "200": { "description": "Request accepted" }, "503": { "$ref": "#/components/responses/Error" } } }
     },
     "/auth/password/reset": {
-      "post": { "tags": ["Authentication"], "summary": "Reset password", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["token", "password"], "properties": { "token": { "type": "string" }, "password": { "type": "string", "minLength": 10 } } } } } }, "responses": { "200": { "description": "Password changed" } } }
+      "post": { "tags": ["Authentication"], "summary": "Reset password", "description": "Consumes the single-use reset token and revokes every active refresh session for the account.", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["token", "password"], "properties": { "token": { "type": "string", "minLength": 20 }, "password": { "type": "string", "minLength": 10, "maxLength": 128 } } } } } }, "responses": { "200": { "description": "Password changed" }, "404": { "$ref": "#/components/responses/Error" }, "422": { "$ref": "#/components/responses/Error" } } }
     },
     "/auth/invitations/accept": {
       "post": { "tags": ["Authentication"], "summary": "Activate an invited Agency Agent or Chauffeur account", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["token", "password"], "properties": { "token": { "type": "string" }, "password": { "type": "string", "minLength": 10 } } } } } }, "responses": { "200": { "description": "Account activated" } } }
@@ -47,8 +50,17 @@
     "/catalog/services": {
       "get": { "tags": ["Catalog"], "summary": "List all Release 1 services", "responses": { "200": { "description": "Service catalog" } } }
     },
+    "/catalog/countries": {
+      "get": { "tags": ["Catalog"], "summary": "List active countries for frontend selection", "description": "When serviceCode is supplied, returns only countries with an active online-bookable vehicle class and configured price for that instant-booking service.", "parameters": [{ "name": "serviceCode", "in": "query", "schema": { "$ref": "#/components/schemas/InstantServiceCode" } }], "responses": { "200": { "description": "Active countries" } } }
+    },
+    "/catalog/cities": {
+      "get": { "tags": ["Catalog"], "summary": "List active cities in a country", "parameters": [{ "name": "countryId", "in": "query", "required": true, "schema": { "type": "integer" } }, { "name": "search", "in": "query", "schema": { "type": "string", "maxLength": 100 } }], "responses": { "200": { "description": "Active cities with coordinates" } } }
+    },
+    "/catalog/location/resolve": {
+      "get": { "tags": ["Catalog"], "summary": "Resolve a reverse-geocoded country and city to database IDs", "description": "Call after device geolocation and reverse geocoding. Pass the ISO alpha-2 country code and optional city name; the endpoint does not receive or retain device coordinates.", "parameters": [{ "name": "countryCode", "in": "query", "required": true, "schema": { "type": "string", "minLength": 2, "maxLength": 2, "example": "CH" } }, { "name": "city", "in": "query", "schema": { "type": "string", "maxLength": 191, "example": "Geneva" } }], "responses": { "200": { "description": "Matched country and optional city IDs" }, "422": { "$ref": "#/components/responses/Error" } } }
+    },
     "/catalog/vehicle-classes": {
-      "get": { "tags": ["Catalog"], "summary": "List classes backed by available online vehicles", "description": "Client and Agent apps receive class-level choices only. Internal vehicle status values are never returned. When startAt and endAt are supplied together, blocked, reserved and already allocated vehicles are excluded.", "parameters": [{ "$ref": "#/components/parameters/ServiceCodeQuery" }, { "name": "countryId", "in": "query", "required": true, "schema": { "type": "integer" } }, { "name": "passengerCount", "in": "query", "schema": { "type": "integer", "default": 1 } }, { "name": "startAt", "in": "query", "schema": { "type": "string", "format": "date-time" } }, { "name": "endAt", "in": "query", "schema": { "type": "string", "format": "date-time" } }], "responses": { "200": { "description": "Available vehicle classes without fleet status fields" } } }
+      "get": { "tags": ["Catalog"], "summary": "List classes backed by available online vehicles", "description": "Client and Agent apps receive class-level choices only. Results are restricted to status=1 physical vehicles mapped to the selected country and, when supplied, city. Internal fleet status values are never returned. When startAt and endAt are supplied together, blocked, reserved and already allocated vehicles are excluded.", "parameters": [{ "$ref": "#/components/parameters/ServiceCodeQuery" }, { "name": "countryId", "in": "query", "required": true, "schema": { "type": "integer" } }, { "name": "cityId", "in": "query", "schema": { "type": "integer", "description": "Optional strict city filter; omit only when the city could not be matched" } }, { "name": "passengerCount", "in": "query", "schema": { "type": "integer", "default": 1 } }, { "name": "startAt", "in": "query", "schema": { "type": "string", "format": "date-time" } }, { "name": "endAt", "in": "query", "schema": { "type": "string", "format": "date-time" } }], "responses": { "200": { "description": "Available vehicle classes without fleet status fields" } } }
     },
     "/catalog/options": {
       "get": { "tags": ["Catalog"], "summary": "List options for a service", "parameters": [{ "$ref": "#/components/parameters/ServiceCodeQuery" }], "responses": { "200": { "description": "Options" } } }
@@ -97,7 +109,7 @@
     },
     "/client/profile": {
       "get": { "tags": ["Client"], "summary": "Get client profile", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Profile" } } },
-      "patch": { "tags": ["Client"], "summary": "Update client profile", "security": [{ "bearerAuth": [] }], "requestBody": { "content": { "application/json": { "schema": { "type": "object", "additionalProperties": true } } } }, "responses": { "200": { "description": "Updated" } } }
+      "patch": { "tags": ["Client"], "summary": "Update client profile", "security": [{ "bearerAuth": [] }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ClientProfileUpdate" } } } }, "responses": { "200": { "description": "Updated profile" }, "422": { "$ref": "#/components/responses/Error" } } }
     },
     "/client/bookings/{reservationId}/tracking": {
       "get": { "tags": ["Client"], "summary": "Get assignment status, latest GPS location and timeline", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/ReservationId" }], "responses": { "200": { "description": "Tracking state" } } }
@@ -107,6 +119,10 @@
     },
     "/agent/dashboard": {
       "get": { "tags": ["Agency Agent"], "summary": "Get roster, booking, alert and commission summary", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Agent dashboard" } } }
+    },
+    "/agent/profile": {
+      "get": { "tags": ["Agency Agent"], "summary": "Get the authenticated Agent profile", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Agent profile" } } },
+      "patch": { "tags": ["Agency Agent"], "summary": "Update the authenticated Agent profile", "security": [{ "bearerAuth": [] }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AgentProfileUpdate" } } } }, "responses": { "200": { "description": "Updated profile" }, "422": { "$ref": "#/components/responses/Error" } } }
     },
     "/agent/clients": {
       "get": { "tags": ["Agency Agent"], "summary": "List the agent's assigned clients", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PerPage" }, { "name": "search", "in": "query", "schema": { "type": "string" } }], "responses": { "200": { "$ref": "#/components/responses/Paginated" } } },
@@ -123,6 +139,10 @@
     },
     "/chauffeur/dashboard": {
       "get": { "tags": ["Chauffeur"], "summary": "Get today's and upcoming assignments", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Chauffeur dashboard" } } }
+    },
+    "/chauffeur/profile": {
+      "get": { "tags": ["Chauffeur"], "summary": "Get the authenticated Chauffeur profile", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Chauffeur profile" } } },
+      "patch": { "tags": ["Chauffeur"], "summary": "Update the authenticated Chauffeur profile", "description": "Personal/contact fields only. Licence and compliance documents remain controlled by Operations/document workflows.", "security": [{ "bearerAuth": [] }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ChauffeurProfileUpdate" } } } }, "responses": { "200": { "description": "Updated profile" }, "422": { "$ref": "#/components/responses/Error" } } }
     },
     "/chauffeur/assignments/{assignmentId}": {
       "get": { "tags": ["Chauffeur"], "summary": "Get one assigned service and passenger details", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/AssignmentId" }], "responses": { "200": { "description": "Assignment detail" } } }
@@ -194,6 +214,9 @@
     "/operations/chauffeurs": {
       "post": { "tags": ["Operations"], "summary": "Invite a Chauffeur", "security": [{ "bearerAuth": [] }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ChauffeurInvitation" } } } }, "responses": { "201": { "description": "Invitation created" } } }
     },
+    "/operations/chauffeurs/available": {
+      "get": { "tags": ["Operations"], "summary": "List chauffeurs without overlapping assignments", "description": "Admin/Staff only. Optional country, city and provider filters are applied after excluding active overlapping assignments.", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "startAt", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } }, { "name": "endAt", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } }, { "name": "countryId", "in": "query", "schema": { "type": "integer" } }, { "name": "cityId", "in": "query", "schema": { "type": "integer" } }, { "name": "providerId", "in": "query", "schema": { "type": "integer" } }], "responses": { "200": { "description": "Available chauffeurs" }, "422": { "$ref": "#/components/responses/Error" } } }
+    },
     "/operations/agent-client-assignments": {
       "post": { "tags": ["Operations"], "summary": "Assign an existing client to an Agency Agent", "security": [{ "bearerAuth": [] }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["agentId", "customerId"], "properties": { "agentId": { "type": "integer" }, "customerId": { "type": "integer" }, "notes": { "type": "string" } } } } } }, "responses": { "201": { "description": "Assigned" } } }
     },
@@ -207,7 +230,7 @@
       "post": { "tags": ["Operations"], "summary": "Assign an available chauffeur to one booking leg", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/ReservationId" }, { "$ref": "#/components/parameters/DetailId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["driverId", "scheduledStartAt", "scheduledEndAt"], "properties": { "driverId": { "type": "integer" }, "scheduledStartAt": { "type": "string", "format": "date-time" }, "scheduledEndAt": { "type": "string", "format": "date-time" } } } } } }, "responses": { "201": { "description": "Assignment offered" }, "409": { "$ref": "#/components/responses/Error" } } }
     },
     "/operations/vehicles/available": {
-      "get": { "tags": ["Operations"], "summary": "List physical vehicles available for allocation", "description": "Admin/Staff only. Returns status=1 and online-booking-enabled vehicles after excluding legacy blocks, reserved dates and overlapping active allocations.", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "vehicleClassId", "in": "query", "required": true, "schema": { "type": "integer" } }, { "name": "startAt", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } }, { "name": "endAt", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } }], "responses": { "200": { "description": "Available physical vehicles" }, "422": { "$ref": "#/components/responses/Error" } } }
+      "get": { "tags": ["Operations"], "summary": "List physical vehicles available for allocation", "description": "Admin/Staff only. Returns status=1 and online-booking-enabled vehicles after applying optional country/city mapping and excluding legacy blocks, reserved dates and overlapping active allocations.", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "vehicleClassId", "in": "query", "required": true, "schema": { "type": "integer" } }, { "name": "countryId", "in": "query", "schema": { "type": "integer" } }, { "name": "cityId", "in": "query", "schema": { "type": "integer" } }, { "name": "startAt", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } }, { "name": "endAt", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } }], "responses": { "200": { "description": "Available physical vehicles" }, "422": { "$ref": "#/components/responses/Error" } } }
     },
     "/operations/bookings/{reservationId}/legs/{detailId}/assign-vehicle": {
       "post": { "tags": ["Operations"], "summary": "Allocate an available physical vehicle after class selection", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/ReservationId" }, { "$ref": "#/components/parameters/DetailId" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["vehicleId"], "properties": { "vehicleId": { "type": "integer" } } } } } }, "responses": { "201": { "description": "Vehicle allocated" }, "409": { "$ref": "#/components/responses/Error" } } }
@@ -256,6 +279,10 @@
       "Tokens": { "type": "object", "properties": { "accessToken": { "type": "string" }, "refreshToken": { "type": "string" }, "expiresIn": { "type": "string", "example": "15m" } } },
       "ClientRegistration": { "type": "object", "required": ["fullName", "email", "password", "phone"], "properties": { "fullName": { "type": "string" }, "email": { "type": "string", "format": "email" }, "password": { "type": "string", "minLength": 10 }, "phone": { "type": "string" }, "language": { "type": "string", "default": "en" }, "countryId": { "type": "integer" }, "city": { "type": "string" } } },
       "Login": { "type": "object", "required": ["email", "password"], "properties": { "email": { "type": "string", "format": "email" }, "password": { "type": "string" }, "device": { "type": "object", "properties": { "deviceId": { "type": "string" }, "platform": { "enum": ["IOS", "ANDROID", "WEB"] }, "pushToken": { "type": "string" }, "appVersion": { "type": "string" } } } } },
+      "GoogleLogin": { "type": "object", "required": ["idToken"], "properties": { "idToken": { "type": "string", "description": "Google OpenID Connect ID token returned to the mobile/web client" }, "phone": { "type": "string", "description": "Required only when the verified Google email has no existing account" }, "language": { "type": "string", "default": "en" }, "countryId": { "type": "integer" }, "city": { "type": "string" }, "device": { "type": "object", "properties": { "deviceId": { "type": "string" }, "platform": { "enum": ["IOS", "ANDROID", "WEB"] }, "pushToken": { "type": "string" }, "appVersion": { "type": "string" } } } } },
+      "ClientProfileUpdate": { "type": "object", "minProperties": 1, "properties": { "title": { "type": "string", "nullable": true }, "fullName": { "type": "string" }, "lastName": { "type": "string", "nullable": true }, "phone": { "type": "string" }, "dateOfBirth": { "type": "string", "format": "date", "nullable": true }, "countryId": { "type": "integer", "nullable": true }, "city": { "type": "string", "nullable": true }, "state": { "type": "string", "nullable": true }, "zipCode": { "type": "string", "nullable": true }, "addressOne": { "type": "string", "nullable": true }, "addressTwo": { "type": "string", "nullable": true }, "language": { "type": "string" } } },
+      "AgentProfileUpdate": { "type": "object", "minProperties": 1, "properties": { "fullName": { "type": "string" }, "phone": { "type": "string", "nullable": true }, "address": { "type": "string", "nullable": true }, "language": { "type": "string" } } },
+      "ChauffeurProfileUpdate": { "type": "object", "minProperties": 1, "properties": { "title": { "type": "string", "nullable": true }, "fullName": { "type": "string" }, "lastName": { "type": "string", "nullable": true }, "phone": { "type": "string", "nullable": true }, "countryId": { "type": "integer" }, "cityId": { "type": "integer", "nullable": true }, "state": { "type": "string", "nullable": true }, "street": { "type": "string", "nullable": true }, "city": { "type": "string", "nullable": true }, "zip": { "type": "string", "nullable": true }, "address": { "type": "string", "nullable": true }, "language": { "type": "string" } } },
       "InstantServiceCode": { "type": "string", "enum": ["CHAUFFEUR", "TRANSFER", "CAR_RENTAL"] },
       "Location": { "type": "object", "required": ["address", "countryId"], "properties": { "address": { "type": "string" }, "buildingName": { "type": "string" }, "unit": { "type": "string" }, "floor": { "type": "string" }, "instructions": { "type": "string" }, "latitude": { "type": "number" }, "longitude": { "type": "number" }, "countryId": { "type": "integer" }, "cityId": { "type": "integer" }, "city": { "type": "string" } } },
       "BookingLeg": { "type": "object", "required": ["startAt", "pickup"], "properties": { "startAt": { "type": "string", "format": "date-time" }, "endAt": { "type": "string", "format": "date-time" }, "pickup": { "$ref": "#/components/schemas/Location" }, "dropoff": { "$ref": "#/components/schemas/Location" }, "stops": { "type": "array", "maxItems": 10, "items": { "$ref": "#/components/schemas/Location" } }, "approximateDistanceKm": { "type": "number" }, "isHourly": { "type": "boolean" }, "notes": { "type": "string" } } },

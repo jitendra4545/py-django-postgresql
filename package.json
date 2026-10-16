@@ -1,6 +1,6 @@
 {
   "name": "drive-luxury-backend-r1",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "description": "Drive Luxury Release 1 API for Client, Agency Agent and Chauffeur applications",
   "type": "module",
@@ -10,7 +10,7 @@
   },
   "scripts": {
     "dev": "node --watch src/server.js",
-    "start": "nodemon src/server.js",
+    "start": "node src/server.js",
     "migrate": "node src/scripts/migrate.js",
     "verify:schema": "node src/scripts/verify-legacy-schema.js",
     "syntax:check": "node scripts/check-syntax.js && node scripts/check-openapi.js",
@@ -20,7 +20,9 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "build": "npm run syntax:check && npm test",
-    "seed:admin": "node scripts/seed-admin.js",
+    "console:install": "npm --prefix api-console install",
+    "console:dev": "npm --prefix api-console run dev",
+    "console:build": "npm --prefix api-console run build",
     "seed:chauffeur-demo": "node scripts/seed-chauffeur-demo-bookings.js"
   },
   "dependencies": {
@@ -34,13 +36,14 @@
     "expo-server-sdk": "^7.2.0",
     "express": "^5.1.0",
     "express-rate-limit": "^8.1.0",
+    "google-auth-library": "^10.9.1",
     "helmet": "^8.1.0",
     "ioredis": "^5.7.0",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.1",
     "multer": "^2.0.2",
     "mysql2": "^3.14.5",
-    "nodemon": "^3.1.14",
+    "nodemailer": "^10.1.1",
     "socket.io": "^4.8.1",
     "stripe": "^23.0.0",
     "swagger-ui-express": "^5.0.1",

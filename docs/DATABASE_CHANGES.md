@@ -17,6 +17,8 @@ Run `npm run verify:schema` before migration/deployment. It validates the legacy
 | `agents`                             | Agency administrators/members; never rental inspectors                                      |
 | `agencies`                           | Agency status and commission percentage                                                     |
 | `drivers`                            | Chauffeur profile                                                                           |
+| `countries`                          | Active country IDs and ISO-style codes used by booking/catalog requests                     |
+| `cities`                             | Active city IDs, aliases, and coordinates filtered by country                               |
 | `services`                           | Legacy service linkage (Transfer 7, Chauffeur 8, Car Rental 10 in supplied dump)            |
 | `vehicle_classes`                    | Client-facing vehicle-class selection                                                       |
 | `vehicles`                           | Physical fleet inventory; only status 1 and online-bookable rows are eligible               |
@@ -43,7 +45,7 @@ The availability rule is strict: only `vehicles.status = 1` (Available),
 2–7 remain internal to the existing fleet system and are never presented as client
 or agent choices.
 
-## New tables (29 additive `app_*` tables)
+## New tables (30 additive `app_*` tables)
 
 | New table                           | Important keys/fields                                                          | Purpose                                              |
 | ----------------------------------- | ------------------------------------------------------------------------------ | ---------------------------------------------------- |
@@ -52,6 +54,7 @@ or agent choices.
 | `app_refresh_tokens`                | UUID PK, unique `token_hash`, `user_id`, expiry/revocation                     | Rotating login sessions                              |
 | `app_user_devices`                  | Unique `device_id`, unique `push_token`, `user_id`                             | One-owner device and push registration               |
 | `app_password_reset_tokens`         | Unique `token_hash`, expiry/used timestamps                                    | Password reset lifecycle                             |
+| `app_user_oauth_accounts`           | Unique provider subject and unique `(user_id, provider)`                       | Verified Google identity linkage                     |
 | `app_account_invitations`           | Unique `token_hash`, `role`, `user_id`, expiry                                 | Approved Agent/Chauffeur onboarding                  |
 | `app_agent_customer_assignments`    | Unique `(agent_id, customer_id)`, `agency_id`, preferences                     | Personal client roster and authorization boundary    |
 | `app_booking_drafts`                | Creator/client/agency, `service_code`, JSON `details`, `revision`              | Multi-step booking form state                        |

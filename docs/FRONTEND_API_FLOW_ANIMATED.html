@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Drive Luxury API Flow</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #07111f;
+        --panel: #101d30;
+        --text: #edf5ff;
+        --muted: #9db0c9;
+        --line: #2d4261;
+        --accent: #55d6be;
+        --accent2: #78a8ff;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: radial-gradient(circle at top, #132a46, var(--bg) 55%);
+        color: var(--text);
+        font:
+          15px/1.5 system-ui,
+          sans-serif;
+      }
+      main {
+        width: min(1100px, 94vw);
+        margin: 0 auto;
+        padding: 34px 0 56px;
+      }
+      h1 {
+        margin: 0 0 6px;
+        font-size: clamp(26px, 5vw, 44px);
+        font-weight: 650;
+      }
+      .lead {
+        color: var(--muted);
+        margin: 0 0 24px;
+      }
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-bottom: 22px;
+      }
+      button {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--panel);
+        color: var(--text);
+        padding: 10px 14px;
+        font: inherit;
+        cursor: pointer;
+      }
+      button[aria-selected='true'],
+      button.primary {
+        background: var(--accent);
+        color: #041510;
+        border-color: transparent;
+      }
+      .controls {
+        display: flex;
+        gap: 10px;
+        margin-left: auto;
+      }
+      .flow {
+        display: grid;
+        gap: 12px;
+      }
+      .step {
+        display: grid;
+        grid-template-columns: 54px 1fr;
+        gap: 14px;
+        align-items: start;
+        padding: 16px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: color-mix(in srgb, var(--panel) 92%, transparent);
+        opacity: 0.54;
+        transform: scale(0.985);
+        transition:
+          opacity 0.35s,
+          transform 0.35s,
+          border-color 0.35s;
+      }
+      .step.active {
+        opacity: 1;
+        transform: scale(1);
+        border-color: var(--accent);
+        box-shadow:
+          0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent),
+          0 12px 30px #0005;
+      }
+      .step.done {
+        opacity: 0.82;
+      }
+      .number {
+        display: grid;
+        place-items: center;
+        width: 42px;
+        height: 42px;
+        border-radius: 50%;
+        background: var(--line);
+        font-weight: 700;
+      }
+      .active .number {
+        background: var(--accent);
+        color: #041510;
+        animation: pulse 1.2s ease-in-out infinite alternate;
+      }
+      .done .number {
+        background: var(--accent2);
+        color: #07111f;
+      }
+      h2 {
+        margin: 0 0 4px;
+        font-size: 18px;
+      }
+      code {
+        color: var(--accent);
+        overflow-wrap: anywhere;
+      }
+      .detail {
+        color: var(--muted);
+        margin: 4px 0 0;
+      }
+      .status {
+        margin: 18px 0 0;
+        color: var(--muted);
+      }
+      .note {
+        margin-top: 22px;
+        padding: 15px 17px;
+        border-left: 3px solid var(--accent2);
+        background: #0d192a;
+        border-radius: 0 10px 10px 0;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      @keyframes pulse {
+        from {
+          transform: scale(0.94);
+        }
+        to {
+          transform: scale(1.06);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation: none !important;
+          transition: none !important;
+        }
+      }
+      @media (max-width: 650px) {
+        .controls {
+          margin-left: 0;
+          width: 100%;
+        }
+        .step {
+          grid-template-columns: 44px 1fr;
+          padding: 13px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Drive Luxury frontend → API flow</h1>
+      <p class="lead">Choose an app, then play or step through exactly when each API is called.</p>
+      <div class="toolbar" role="tablist" aria-label="Application flow">
+        <button role="tab" aria-selected="true" data-flow="client">Client</button>
+        <button role="tab" aria-selected="false" data-flow="agent">Agency Agent</button>
+        <button role="tab" aria-selected="false" data-flow="chauffeur">Chauffeur</button>
+        <div class="controls">
+          <button id="previous" type="button">Previous</button>
+          <button id="play" class="primary" type="button">Play</button>
+          <button id="next" type="button">Next</button>
+        </div>
+      </div>
+      <section id="flow" class="flow" aria-live="polite"></section>
+      <p id="status" class="status"></p>
+      <aside class="note">
+        <strong>Inventory rule:</strong> Client and Agent APIs return vehicle classes only. The
+        backend uses existing <code>vehicle_cities</code>, permits only
+        <code>vehicles.status = 1</code>, and rechecks location/time before quote and physical
+        assignment.
+      </aside>
+    </main>
+    <script>
+      const flows = {
+        client: [
+          ['Restore session', 'GET /auth/me', 'Call on launch when a stored access token exists.'],
+          [
+            'Load services',
+            'GET /catalog/services',
+            'Display Chauffeur, Transfer, Car Rental and manual-request services.',
+          ],
+          [
+            'Detect a default',
+            'Device GPS → reverse geocoding',
+            'Request permission. If denied, continue with manual selection.',
+          ],
+          [
+            'Resolve database IDs',
+            'GET /catalog/location/resolve?countryCode=CH&city=Geneva',
+            'Convert external country/city names into existing countryId and cityId values.',
+          ],
+          [
+            'Allow manual choice',
+            'GET /catalog/countries and GET /catalog/cities',
+            'Never lock the GPS result; the user may choose another service location.',
+          ],
+          [
+            'Find available classes',
+            'GET /catalog/vehicle-classes?serviceCode=...&countryId=...&cityId=...&startAt=...&endAt=...',
+            'Only locally mapped, active, online, unblocked and unreserved inventory qualifies.',
+          ],
+          [
+            'Create and save draft',
+            'POST /bookings/drafts → PUT /bookings/drafts/{id}/details',
+            'Save passenger, class, options and complete pickup/drop-off location objects.',
+          ],
+          [
+            'Quote and checkout',
+            'POST /quote → POST /checkout',
+            'Availability is rechecked, pricing is calculated, and Stripe PaymentIntent data is returned.',
+          ],
+          [
+            'Confirm and track',
+            'GET /payments/{id} → GET /bookings/{id}',
+            'Backend payment/webhook state is authoritative; live rides use the tracking API.',
+          ],
+        ],
+        agent: [
+          ['Restore Agent session', 'GET /auth/me', 'Confirm role 4 and load Agent navigation.'],
+          [
+            'Select managed client',
+            'GET /agent/clients',
+            'Choose an assigned customer; create one through POST /agent/clients when allowed.',
+          ],
+          [
+            'Load services',
+            'GET /catalog/services',
+            'The Agent sees the same booking services as the Client.',
+          ],
+          [
+            'Resolve or choose location',
+            'GET /catalog/location/resolve, /countries, /cities',
+            'Use GPS as a default and allow manual country/city selection.',
+          ],
+          [
+            'Find available classes',
+            'GET /catalog/vehicle-classes?...&countryId=...&cityId=...',
+            'Use the selected client trip location, dates and passenger count.',
+          ],
+          [
+            'Create client draft',
+            'POST /bookings/drafts with customerId',
+            'The backend verifies that this client is assigned to the Agent.',
+          ],
+          [
+            'Save, quote and pay',
+            'PUT /details → POST /quote → POST /checkout',
+            'The remaining booking and Stripe flow is shared with the Client.',
+          ],
+          [
+            'Manage result',
+            'GET /agent/clients/{customerId}/bookings',
+            'Track the managed client booking and view commission records.',
+          ],
+        ],
+        chauffeur: [
+          [
+            'Activate invited account',
+            'POST /auth/invitations/accept',
+            'Chauffeurs do not self-register in Release 1.',
+          ],
+          [
+            'Login and register device',
+            'POST /auth/login',
+            'Send the Expo push token for assignment notifications.',
+          ],
+          [
+            'Load work',
+            'GET /chauffeur/dashboard',
+            'Call on Home open, pull-to-refresh and push-notification navigation.',
+          ],
+          [
+            'Review assignment',
+            'GET /chauffeur/assignments/{id}',
+            'Show itinerary, passenger and operational details.',
+          ],
+          [
+            'Accept or decline',
+            'POST /acknowledge or POST /decline',
+            'Operations receives the decision.',
+          ],
+          [
+            'Run the service',
+            'POST /status',
+            'Advance only through the backend-controlled ride state machine.',
+          ],
+          [
+            'Send live position',
+            'POST /location',
+            'Send coordinates only during an active assignment.',
+          ],
+          [
+            'Finish and review',
+            'POST /status COMPLETED → GET /chauffeur/history',
+            'Expenses, incidents, chat and documents are action-driven APIs.',
+          ],
+        ],
+      };
+      let currentFlow = 'client',
+        index = 0,
+        timer = null;
+      const flow = document.getElementById('flow'),
+        status = document.getElementById('status'),
+        play = document.getElementById('play');
+      function draw() {
+        const items = flows[currentFlow];
+        flow.innerHTML = items
+          .map(
+            (item, i) =>
+              `<article class="step ${i === index ? 'active' : i < index ? 'done' : ''}"><div class="number">${i + 1}</div><div><h2>${item[0]}</h2><code>${item[1]}</code><p class="detail">${item[2]}</p></div></article>`,
+          )
+          .join('');
+        status.textContent = `Step ${index + 1} of ${items.length}`;
+        flow.children[index]?.scrollIntoView({
+          behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+          block: 'nearest',
+        });
+      }
+      function stop() {
+        clearInterval(timer);
+        timer = null;
+        play.textContent = 'Play';
+      }
+      function advance() {
+        const max = flows[currentFlow].length - 1;
+        if (index >= max) {
+          stop();
+          return;
+        }
+        index++;
+        draw();
+      }
+      document.querySelectorAll('[data-flow]').forEach((button) =>
+        button.addEventListener('click', () => {
+          stop();
+          document
+            .querySelectorAll('[data-flow]')
+            .forEach((b) => b.setAttribute('aria-selected', 'false'));
+          button.setAttribute('aria-selected', 'true');
+          currentFlow = button.dataset.flow;
+          index = 0;
+          draw();
+        }),
+      );
+      document.getElementById('next').addEventListener('click', () => {
+        stop();
+        index = Math.min(index + 1, flows[currentFlow].length - 1);
+        draw();
+      });
+      document.getElementById('previous').addEventListener('click', () => {
+        stop();
+        index = Math.max(index - 1, 0);
+        draw();
+      });
+      play.addEventListener('click', () => {
+        if (timer) {
+          stop();
+          return;
+        }
+        if (index === flows[currentFlow].length - 1) index = 0;
+        play.textContent = 'Pause';
+        draw();
+        timer = setInterval(advance, 1800);
+      });
+      draw();
+    </script>
+  </body>
+</html>

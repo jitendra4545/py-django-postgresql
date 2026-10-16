@@ -40,7 +40,7 @@ app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 app.use(morgan(env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(rateLimit({ windowMs: 60_000, limit: 300, standardHeaders: true, legacyHeaders: false }));
 
-app.get('/health', (_request, response) => response.json({ status: 'ok', version: '2.0.0' }));
+app.get('/health', (_request, response) => response.json({ status: 'ok', version: '2.1.0' }));
 app.use('/docs', swaggerUi.serve, swaggerUi.setup(openapi));
 app.get('/openapi.json', (_request, response) => response.json(openapi));
 

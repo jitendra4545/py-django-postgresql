@@ -9,6 +9,7 @@ import { validate } from '../common/validate.js';
 import { ROLES, TERMINAL_ASSIGNMENT_STATUSES } from '../config/constants.js';
 import { one, query, transaction } from '../db/pool.js';
 import { notifyBookingAudience } from '../services/notifications.js';
+import { updateProfileTable } from '../services/profile-updates.js';
 import { emitToUser } from '../services/realtime.js';
 
 const router = Router();
@@ -35,6 +36,73 @@ const assignmentFor = async (auth, assignmentId, connection = null, lock = false
   if (!rows[0]) throw notFound('Assignment not found');
   return rows[0];
 };
+
+const loadChauffeurProfile = (driverId) =>
+  one(
+    `SELECT d.id,d.title,d.full_name AS fullName,d.last_name AS lastName,
+            u.email,d.phone,d.country_id AS countryId,d.city_id AS cityId,
+            d.state,d.street,d.city,d.zip,d.address,
+            COALESCE(d.photo,u.photo) AS photo,u.lang AS language
+       FROM drivers d JOIN users u ON u.id=d.user_id
+      WHERE d.id=? AND d.deleted_at IS NULL`,
+    [driverId],
+  );
+
+router.get(
+  '/profile',
+  asyncHandler(async (request, response) => {
+    response.json(await loadChauffeurProfile(request.auth.driverId));
+  }),
+);
+
+router.patch(
+  '/profile',
+  validate(
+    z
+      .object({
+        title: z.string().max(190).nullable().optional(),
+        fullName: z.string().min(2).max(191).optional(),
+        lastName: z.string().max(190).nullable().optional(),
+        phone: z.string().min(6).max(191).nullable().optional(),
+        countryId: z.number().int().positive().optional(),
+        cityId: z.number().int().positive().nullable().optional(),
+        state: z.string().max(191).nullable().optional(),
+        street: z.string().max(190).nullable().optional(),
+        city: z.string().max(191).nullable().optional(),
+        zip: z.string().max(50).nullable().optional(),
+        address: z.string().max(2000).nullable().optional(),
+        language: z.string().min(2).max(10).optional(),
+      })
+      .refine((value) => Object.keys(value).length > 0, {
+        message: 'At least one profile field is required',
+      }),
+  ),
+  asyncHandler(async (request, response) => {
+    await transaction(async (connection) => {
+      await updateProfileTable(connection, 'drivers', request.auth.driverId, request.body, {
+        title: 'title',
+        fullName: 'full_name',
+        lastName: 'last_name',
+        phone: 'phone',
+        countryId: 'country_id',
+        cityId: 'city_id',
+        state: 'state',
+        street: 'street',
+        city: 'city',
+        zip: 'zip',
+        address: 'address',
+      });
+      await updateProfileTable(connection, 'users', request.auth.userId, request.body, {
+        fullName: 'full_name',
+        language: 'lang',
+      });
+    });
+    response.json({
+      message: 'Profile updated',
+      profile: await loadChauffeurProfile(request.auth.driverId),
+    });
+  }),
+);
 
 router.get(
   '/dashboard',

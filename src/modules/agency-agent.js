@@ -9,10 +9,62 @@ import { validate } from '../common/validate.js';
 import { ROLES } from '../config/constants.js';
 import { one, query, transaction } from '../db/pool.js';
 import { hashPassword } from '../services/passwords.js';
+import { updateProfileTable } from '../services/profile-updates.js';
 import { randomToken } from '../services/tokens.js';
 
 const router = Router();
 router.use(requireAuth, requireRoles(ROLES.AGENCY_AGENT));
+
+const loadAgentProfile = (agentId) =>
+  one(
+    `SELECT a.id,a.agency_id AS agencyId,a.agent_type AS agentType,
+            COALESCE(a.full_name,u.full_name) AS fullName,
+            COALESCE(a.email,u.email) AS email,a.phone,a.address,
+            COALESCE(a.photo,u.photo) AS photo,u.lang AS language
+       FROM agents a JOIN users u ON u.id=a.user_id
+      WHERE a.id=? AND a.deleted_at IS NULL`,
+    [agentId],
+  );
+
+router.get(
+  '/profile',
+  asyncHandler(async (request, response) => {
+    response.json(await loadAgentProfile(request.auth.agentId));
+  }),
+);
+
+router.patch(
+  '/profile',
+  validate(
+    z
+      .object({
+        fullName: z.string().min(2).max(191).optional(),
+        phone: z.string().min(6).max(191).nullable().optional(),
+        address: z.string().max(191).nullable().optional(),
+        language: z.string().min(2).max(10).optional(),
+      })
+      .refine((value) => Object.keys(value).length > 0, {
+        message: 'At least one profile field is required',
+      }),
+  ),
+  asyncHandler(async (request, response) => {
+    await transaction(async (connection) => {
+      await updateProfileTable(connection, 'agents', request.auth.agentId, request.body, {
+        fullName: 'full_name',
+        phone: 'phone',
+        address: 'address',
+      });
+      await updateProfileTable(connection, 'users', request.auth.userId, request.body, {
+        fullName: 'full_name',
+        language: 'lang',
+      });
+    });
+    response.json({
+      message: 'Profile updated',
+      profile: await loadAgentProfile(request.auth.agentId),
+    });
+  }),
+);
 
 router.get(
   '/dashboard',

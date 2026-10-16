@@ -128,6 +128,57 @@ router.post(
   }),
 );
 
+router.get(
+  '/chauffeurs/available',
+  validate(
+    z
+      .object({
+        startAt: z.string().datetime(),
+        endAt: z.string().datetime(),
+        countryId: z.coerce.number().int().positive().optional(),
+        cityId: z.coerce.number().int().positive().optional(),
+        providerId: z.coerce.number().int().positive().optional(),
+      })
+      .refine((value) => new Date(value.endAt) > new Date(value.startAt), {
+        message: 'endAt must be after startAt',
+      }),
+    'query',
+  ),
+  asyncHandler(async (request, response) => {
+    const start = request.query.startAt.slice(0, 19).replace('T', ' ');
+    const end = request.query.endAt.slice(0, 19).replace('T', ' ');
+    const filters = [];
+    const params = [end, start];
+    for (const [field, column] of [
+      ['countryId', 'd.country_id'],
+      ['cityId', 'd.city_id'],
+      ['providerId', 'd.provider_id'],
+    ]) {
+      if (request.query[field]) {
+        filters.push(`${column}=?`);
+        params.push(request.query[field]);
+      }
+    }
+    const items = await query(
+      `SELECT d.id,d.full_name AS fullName,d.photo,d.phone,
+              d.country_id AS countryId,d.city_id AS cityId,d.city,d.provider_id AS providerId
+         FROM drivers d
+         JOIN users u ON u.id=d.user_id AND u.status=0 AND u.role=3 AND u.deleted_at IS NULL
+        WHERE d.deleted_at IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM app_driver_assignments ada
+             WHERE ada.driver_id=d.id
+               AND ada.status NOT IN ('DECLINED','COMPLETED','NO_SHOW','CANCELLED')
+               AND ada.scheduled_start_at < ? AND ada.scheduled_end_at > ?
+          )
+          ${filters.length ? `AND ${filters.join(' AND ')}` : ''}
+        ORDER BY d.full_name`,
+      params,
+    );
+    response.json({ items });
+  }),
+);
+
 router.post(
   '/agent-client-assignments',
   validate(
@@ -329,6 +380,8 @@ router.get(
     z
       .object({
         vehicleClassId: z.coerce.number().int().positive(),
+        countryId: z.coerce.number().int().positive().optional(),
+        cityId: z.coerce.number().int().positive().optional(),
         startAt: z.string().datetime(),
         endAt: z.string().datetime(),
       })
@@ -355,10 +408,24 @@ router.post(
       const detail = details[0];
       if (!detail) throw notFound('Booking leg not found');
       const [vehicles] = await connection.execute(
-        `SELECT id,title,model,reg_no FROM vehicles
-          WHERE id=? AND vehicle_class_id=? AND status=1 AND online_booking_status=1
-            AND deleted_at IS NULL FOR UPDATE`,
-        [request.body.vehicleId, detail.vehicle_class_id],
+        `SELECT v.id,v.title,v.model,v.reg_no FROM vehicles v
+          WHERE v.id=? AND v.vehicle_class_id=? AND v.status=1 AND v.online_booking_status=1
+            AND v.deleted_at IS NULL
+            AND EXISTS (
+              SELECT 1 FROM vehicle_cities vehicle_city
+              JOIN cities city ON city.id=vehicle_city.city_id
+               AND city.status=1 AND city.deleted_at IS NULL
+             WHERE vehicle_city.vehicle_id=v.id AND vehicle_city.deleted_at IS NULL
+               AND city.country_id=?
+               AND (?=0 OR vehicle_city.city_id=?)
+            ) FOR UPDATE`,
+        [
+          request.body.vehicleId,
+          detail.vehicle_class_id,
+          detail.pick_up_country_id,
+          detail.pick_up_city_id ?? 0,
+          detail.pick_up_city_id ?? 0,
+        ],
       );
       if (!vehicles[0]) throw notFound('Available vehicle in the selected class not found');
       const [oldAssignments] = await connection.execute(

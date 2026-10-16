@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const migration = fs.readFileSync('migrations/001_release_1_mobile_foundation.sql', 'utf8');
+const oauthMigration = fs.readFileSync('migrations/002_google_oauth_accounts.sql', 'utf8');
 
 describe('Release 1 migration safety', () => {
   it('is additive and does not alter or drop a legacy table', () => {
@@ -25,5 +26,13 @@ describe('Release 1 migration safety', () => {
   it('uses fixed precision and ISO currency in the new payment ledger', () => {
     expect(migration).toMatch(/app_payment_transactions[\s\S]*amount DECIMAL\(12,2\)/);
     expect(migration).toMatch(/currency CHAR\(3\)/);
+  });
+
+  it('adds Google identity links without altering the shared users table', () => {
+    expect(oauthMigration).toMatch(/CREATE TABLE IF NOT EXISTS\s+app_user_oauth_accounts/i);
+    expect(oauthMigration).toMatch(/UNIQUE KEY uq_app_oauth_provider_subject/);
+    expect(oauthMigration).toMatch(/FOREIGN KEY \(user_id\) REFERENCES users\(id\)/);
+    expect(oauthMigration).not.toMatch(/\bALTER\s+TABLE\b/i);
+    expect(oauthMigration).not.toMatch(/\bDROP\s+TABLE\b/i);
   });
 });

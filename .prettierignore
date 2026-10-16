@@ -3,3 +3,5 @@ coverage
 uploads
 docs/openapi.json
 package-lock.json
+api-console/dist
+api-console/package-lock.json

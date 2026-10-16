@@ -14,16 +14,17 @@ The term **Agency Agent** means an administrator or member of an agency. It does
 
 1. Register or log in.
 2. Browse Chauffeur, Transfer, Car Rental, Airport VIP, and Concierge services.
-3. For Chauffeur, Transfer, or Car Rental, create a booking draft.
-4. Enter passenger data and one or more itinerary legs. Locations include address, building/unit/floor/instructions, map coordinates, country, and city.
-5. Choose a vehicle **class** and options. The catalog shows only classes backed by at least one active, online-bookable physical vehicle. With trip dates supplied, existing blocks, reserved dates, and overlapping allocations are also excluded. Internal fleet statuses are never shown.
-6. Create an immutable 30-minute quotation. Availability is rechecked before quoting, and tax configuration is interpreted as a percentage over the taxable base.
-7. Checkout with an idempotency key. The API writes compatible records, creates agency commissions when applicable, and creates a Stripe PaymentIntent.
-8. After payment, operations confirms or rejects the booking.
-9. Operations allocates a physical vehicle and assigns a chauffeur per reservation leg.
-10. The client receives notifications, tracks assignment status and GPS, chats, and uses masked calling.
-11. Changes and cancellations are submitted as requests. On approval, the backend applies and reprices validated changes, recreates commissions, and creates any extra Stripe payment or refund. Cancellation refunds are finalized only by Stripe webhook.
-12. Completed bookings expose structured receipt data.
+3. Load active countries and cities from the catalog instead of hard-coding legacy database IDs.
+4. For Chauffeur, Transfer, or Car Rental, create a booking draft.
+5. Enter passenger data and one or more itinerary legs. Locations include address, building/unit/floor/instructions, map coordinates, country, and city.
+6. Choose a vehicle **class** and options. The catalog shows only classes backed by at least one active, online-bookable physical vehicle. With trip dates supplied, existing blocks, reserved dates, and overlapping allocations are also excluded. Internal fleet statuses are never shown.
+7. Create an immutable 30-minute quotation. Availability is rechecked before quoting, and tax configuration is interpreted as a percentage over the taxable base.
+8. Checkout with an idempotency key. The API writes compatible records, creates agency commissions when applicable, and creates a Stripe PaymentIntent.
+9. After payment, operations confirms or rejects the booking.
+10. Operations allocates a physical vehicle and assigns an available chauffeur per reservation leg.
+11. The client receives notifications, tracks assignment status and GPS, chats, and uses masked calling.
+12. Changes and cancellations are submitted as requests. On approval, the backend applies and reprices validated changes, recreates commissions, and creates any extra Stripe payment or refund. Cancellation refunds are finalized only by Stripe webhook.
+13. Completed bookings expose structured receipt data.
 
 Airport VIP and Concierge use manual-request flows because details and prices require a person to confirm them.
 

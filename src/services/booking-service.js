@@ -36,6 +36,8 @@ export const buildDraftQuote = async (draft) => {
     if (
       !(await hasAvailableVehicle({
         vehicleClassId: details.vehicleClassId,
+        countryId: leg.pickup.countryId,
+        cityId: leg.pickup.cityId,
         startAt: start.toISOString(),
         endAt: end.toISOString(),
       }))

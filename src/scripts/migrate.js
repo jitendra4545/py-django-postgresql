@@ -30,8 +30,8 @@ try {
       [filename],
     );
     if (rows[0]) {
-      // if (rows[0].checksum !== digest) throw new Error(`Applied migration changed: ${filename}`);
-      // console.log(`skip ${filename}`);
+      if (rows[0].checksum !== digest) throw new Error(`Applied migration changed: ${filename}`);
+      console.log(`skip ${filename}`);
       continue;
     }
     await connection.beginTransaction();

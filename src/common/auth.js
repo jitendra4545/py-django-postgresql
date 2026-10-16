@@ -7,87 +7,32 @@ const bearerToken = (request) => {
   return value?.startsWith('Bearer ') ? value.slice(7) : null;
 };
 
-export const requireAuth = async (
-  request,
-  _response,
-  next,
-) => {
-  const token = bearerToken(request);
-
-  if (!token) {
-    return next(
-      new AppError(
-        401,
-        'UNAUTHENTICATED',
-        'Authentication is required',
-      ),
-    );
-  }
-
-  let payload;
-
-  /*
-   * Only JWT verification errors should become TOKEN_INVALID.
-   */
+export const requireAuth = async (request, _response, next) => {
   try {
-    payload = verifyAccessToken(token);
-  } catch {
-    return next(
-      new AppError(
-        401,
-        'TOKEN_INVALID',
-        'The access token is invalid or expired',
-      ),
-    );
-  }
-
-  /*
-   * Database errors must be passed to the normal error handler.
-   * They should not be reported as invalid-token errors.
-   */
-  try {
+    const token = bearerToken(request);
+    if (!token) throw new AppError(401, 'UNAUTHENTICATED', 'Authentication is required');
+    const payload = verifyAccessToken(token);
     const user = await one(
-      `
-        SELECT
-          id,
-          user_name,
-          full_name,
-          email,
-          role,
-          lang
-        FROM users
-        WHERE id = ?
-          AND status = 0
-          AND deleted_at IS NULL
-      `,
+      `SELECT id, user_name, full_name, email, role, lang
+         FROM users
+        WHERE id = ? AND status = 0 AND deleted_at IS NULL`,
       [payload.sub],
     );
-
-    if (
-      !user ||
-      Number(user.role) !==
-        Number(payload.role)
-    ) {
-      throw new AppError(
-        401,
-        'SESSION_INVALID',
-        'The account or session is no longer active',
-      );
+    if (!user || Number(user.role) !== Number(payload.role)) {
+      throw new AppError(401, 'SESSION_INVALID', 'The account or session is no longer active');
     }
 
-    const profile =
-      await loadRoleProfile(user);
-
+    const profile = await loadRoleProfile(user);
     request.auth = {
       userId: user.id,
       role: Number(user.role),
       user,
       ...profile,
     };
-
-    return next();
+    next();
   } catch (error) {
-    return next(error);
+    if (error instanceof AppError) return next(error);
+    return next(new AppError(401, 'TOKEN_INVALID', 'The access token is invalid or expired'));
   }
 };
 
@@ -97,7 +42,8 @@ const loadRoleProfile = async (user) => {
       'SELECT id, agency_id FROM customers WHERE user_id = ? AND deleted_at IS NULL',
       [user.id],
     );
-    return { customerId: customer?.id ?? null, agencyId: customer?.agency_id ?? null };
+    if (!customer) throw forbidden('The client profile is inactive');
+    return { customerId: customer.id, agencyId: customer.agency_id ?? null };
   }
   if (Number(user.role) === 4) {
     const agent = await one(

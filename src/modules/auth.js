@@ -8,6 +8,8 @@ import { validate } from '../common/validate.js';
 import { env } from '../config/env.js';
 import { ROLES, ROLE_NAMES } from '../config/constants.js';
 import { one, query, transaction } from '../db/pool.js';
+import { emailDeliveryEnabled, sendPasswordResetEmail } from '../services/email.js';
+import { verifyGoogleIdToken } from '../services/google-auth.js';
 import { hashPassword, verifyPassword } from '../services/passwords.js';
 import {
   randomToken,
@@ -33,18 +35,58 @@ const registerSchema = z.object({
   city: z.string().max(191).optional(),
 });
 
+const deviceSchema = z.object({
+  deviceId: z.string().min(4).max(191),
+  platform: z.enum(['IOS', 'ANDROID', 'WEB']),
+  pushToken: z.string().max(512).optional(),
+  appVersion: z.string().max(32).optional(),
+});
+
 const loginSchema = z.object({
   email,
   password: z.string().min(1),
-  device: z
-    .object({
-      deviceId: z.string().min(4).max(191),
-      platform: z.enum(['IOS', 'ANDROID', 'WEB']),
-      pushToken: z.string().max(512).optional(),
-      appVersion: z.string().max(32).optional(),
-    })
-    .optional(),
+  device: deviceSchema.optional(),
 });
+
+const googleLoginSchema = z.object({
+  idToken: z.string().min(20),
+  phone: z.string().min(6).max(30).optional(),
+  language: z.string().min(2).max(10).default('en'),
+  countryId: z.number().int().positive().optional(),
+  city: z.string().max(191).optional(),
+  device: deviceSchema.optional(),
+});
+
+const publicUser = (user) => ({
+  id: user.id,
+  fullName: user.full_name,
+  email: user.email,
+  role: Number(user.role),
+  roleName: ROLE_NAMES[user.role],
+  language: user.lang,
+});
+
+const assertAppProfileAvailable = async (user) => {
+  let profile;
+  if (Number(user.role) === ROLES.CLIENT) {
+    profile = await one('SELECT id FROM customers WHERE user_id=? AND deleted_at IS NULL', [
+      user.id,
+    ]);
+  } else if (Number(user.role) === ROLES.AGENCY_AGENT) {
+    profile = await one(
+      `SELECT a.id FROM agents a
+        JOIN agencies agency ON agency.id=a.agency_id
+         AND agency.status=1 AND agency.deleted_at IS NULL
+       WHERE a.user_id=? AND a.deleted_at IS NULL`,
+      [user.id],
+    );
+  } else if (Number(user.role) === ROLES.CHAUFFEUR) {
+    profile = await one('SELECT id FROM drivers WHERE user_id=? AND deleted_at IS NULL', [user.id]);
+  }
+  if (!profile) {
+    throw new AppError(403, 'ROLE_PROFILE_INACTIVE', 'The account profile is inactive');
+  }
+};
 
 const issueSession = async (user, device = null) => {
   const sessionId = uuid();
@@ -134,15 +176,137 @@ router.post(
     if (!user || !(await verifyPassword(request.body.password, user.password))) {
       throw new AppError(401, 'INVALID_CREDENTIALS', 'Email or password is incorrect');
     }
-    const publicUser = {
-      id: user.id,
-      fullName: user.full_name,
-      email: user.email,
-      role: Number(user.role),
-      roleName: ROLE_NAMES[user.role],
-      language: user.lang,
-    };
-    response.json({ user: publicUser, tokens: await issueSession(user, request.body.device) });
+    response.json({
+      user: publicUser(user),
+      tokens: await issueSession(user, request.body.device),
+    });
+  }),
+);
+
+router.post(
+  '/google',
+  validate(googleLoginSchema),
+  asyncHandler(async (request, response) => {
+    const google = await verifyGoogleIdToken(request.body.idToken);
+    let user = await one(
+      `SELECT u.id,u.full_name,u.email,u.role,u.lang,u.status,u.deleted_at
+         FROM app_user_oauth_accounts oauth
+         JOIN users u ON u.id=oauth.user_id
+        WHERE oauth.provider='GOOGLE' AND oauth.provider_subject=?`,
+      [google.subject],
+    );
+
+    if (user && (Number(user.status) !== 0 || user.deleted_at)) {
+      throw new AppError(403, 'ACCOUNT_INACTIVE', 'The linked account is inactive');
+    }
+
+    let created = false;
+    if (!user) {
+      user = await one(
+        `SELECT id,full_name,email,role,lang,status,deleted_at
+           FROM users WHERE email=? ORDER BY id DESC LIMIT 1`,
+        [google.email],
+      );
+      if (user && (Number(user.status) !== 0 || user.deleted_at)) {
+        throw new AppError(403, 'ACCOUNT_INACTIVE', 'The account is inactive');
+      }
+
+      if (user) {
+        if (![ROLES.CLIENT, ROLES.AGENCY_AGENT, ROLES.CHAUFFEUR].includes(Number(user.role))) {
+          throw new AppError(
+            403,
+            'ROLE_NOT_SUPPORTED',
+            'Google login is not enabled for this role',
+          );
+        }
+        const existingLink = await one(
+          `SELECT provider_subject FROM app_user_oauth_accounts
+            WHERE user_id=? AND provider='GOOGLE'`,
+          [user.id],
+        );
+        if (existingLink && existingLink.provider_subject !== google.subject) {
+          throw conflict('This account is already linked to a different Google identity');
+        }
+        if (!existingLink) {
+          await query(
+            `INSERT INTO app_user_oauth_accounts
+              (user_id,provider,provider_subject,provider_email,created_at,updated_at)
+             VALUES (?,'GOOGLE',?,?,NOW(),NOW())`,
+            [user.id, google.subject, google.email],
+          );
+        }
+        if (google.photo && google.photo.length <= 191) {
+          await query('UPDATE users SET photo=COALESCE(photo,?),updated_at=NOW() WHERE id=?', [
+            google.photo,
+            user.id,
+          ]);
+        }
+      } else {
+        if (!request.body.phone) {
+          throw new AppError(
+            422,
+            'GOOGLE_REGISTRATION_REQUIRED',
+            'A phone number is required to create a new client account',
+            { requiredFields: ['phone'] },
+          );
+        }
+        user = await transaction(async (connection) => {
+          const password = await hashPassword(randomToken());
+          const photo = google.photo && google.photo.length <= 191 ? google.photo : null;
+          const [userResult] = await connection.execute(
+            `INSERT INTO users
+              (user_name,full_name,photo,email,password,status,role,lang,created_at,updated_at)
+             VALUES (?,?,?,?,?,0,?,?,NOW(),NOW())`,
+            [
+              google.email,
+              google.fullName,
+              photo,
+              google.email,
+              password,
+              ROLES.CLIENT,
+              request.body.language,
+            ],
+          );
+          await connection.execute(
+            `INSERT INTO customers
+              (uuid,full_name,photo,email,phone_no,country_id,city,status,user_id,created_by,is_registered,created_at,updated_at)
+             VALUES (?,?,?,?,?,?,?,1,?,?,1,NOW(),NOW())`,
+            [
+              uuid(),
+              google.fullName,
+              photo,
+              google.email,
+              request.body.phone,
+              request.body.countryId ?? null,
+              request.body.city ?? null,
+              userResult.insertId,
+              userResult.insertId,
+            ],
+          );
+          await connection.execute(
+            `INSERT INTO app_user_oauth_accounts
+              (user_id,provider,provider_subject,provider_email,created_at,updated_at)
+             VALUES (?,'GOOGLE',?,?,NOW(),NOW())`,
+            [userResult.insertId, google.subject, google.email],
+          );
+          return {
+            id: userResult.insertId,
+            full_name: google.fullName,
+            email: google.email,
+            role: ROLES.CLIENT,
+            lang: request.body.language,
+          };
+        });
+        created = true;
+      }
+    }
+
+    await assertAppProfileAvailable(user);
+    response.status(created ? 201 : 200).json({
+      user: publicUser(user),
+      tokens: await issueSession(user, request.body.device),
+      isNewAccount: created,
+    });
   }),
 );
 
@@ -203,17 +367,41 @@ router.post(
   '/password/forgot',
   validate(z.object({ email })),
   asyncHandler(async (request, response) => {
-    const user = await one('SELECT id FROM users WHERE email = ? AND deleted_at IS NULL', [
-      request.body.email,
-    ]);
+    const user = await one(
+      `SELECT id,full_name,email FROM users
+        WHERE email=? AND status=0 AND deleted_at IS NULL`,
+      [request.body.email],
+    );
     if (user) {
       const raw = randomToken();
-      await query(
-        `INSERT INTO app_password_reset_tokens (user_id, token_hash, expires_at, created_at)
-         VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 30 MINUTE), NOW())`,
-        [user.id, tokenHash(raw)],
-      );
-      if (env.NODE_ENV !== 'production') response.set('X-Debug-Reset-Token', raw);
+      const resetId = await transaction(async (connection) => {
+        await connection.execute(
+          `UPDATE app_password_reset_tokens SET used_at=NOW()
+            WHERE user_id=? AND used_at IS NULL`,
+          [user.id],
+        );
+        const [result] = await connection.execute(
+          `INSERT INTO app_password_reset_tokens (user_id,token_hash,expires_at,created_at)
+           VALUES (?,?,DATE_ADD(NOW(),INTERVAL 30 MINUTE),NOW())`,
+          [user.id, tokenHash(raw)],
+        );
+        return result.insertId;
+      });
+
+      if (emailDeliveryEnabled()) {
+        try {
+          await sendPasswordResetEmail({
+            to: user.email,
+            fullName: user.full_name,
+            token: raw,
+          });
+        } catch (error) {
+          await query('UPDATE app_password_reset_tokens SET used_at=NOW() WHERE id=?', [resetId]);
+          throw error;
+        }
+      } else if (env.NODE_ENV !== 'production') {
+        response.set('X-Debug-Reset-Token', raw);
+      }
     }
     response.json({ message: 'If the account exists, password reset instructions will be sent.' });
   }),
@@ -223,20 +411,23 @@ router.post(
   '/password/reset',
   validate(z.object({ token: z.string().min(20), password: z.string().min(10).max(128) })),
   asyncHandler(async (request, response) => {
-    const reset = await one(
-      `SELECT id, user_id FROM app_password_reset_tokens
-        WHERE token_hash = ? AND used_at IS NULL AND expires_at > NOW()`,
-      [tokenHash(request.body.token)],
-    );
-    if (!reset) throw notFound('The password reset token is invalid or expired');
     await transaction(async (connection) => {
+      const [rows] = await connection.execute(
+        `SELECT id,user_id FROM app_password_reset_tokens
+          WHERE token_hash=? AND used_at IS NULL AND expires_at>NOW()
+          FOR UPDATE`,
+        [tokenHash(request.body.token)],
+      );
+      const reset = rows[0];
+      if (!reset) throw notFound('The password reset token is invalid or expired');
       await connection.execute('UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?', [
         await hashPassword(request.body.password),
         reset.user_id,
       ]);
       await connection.execute(
-        'UPDATE app_password_reset_tokens SET used_at = NOW() WHERE id = ?',
-        [reset.id],
+        `UPDATE app_password_reset_tokens SET used_at=NOW()
+          WHERE user_id=? AND used_at IS NULL`,
+        [reset.user_id],
       );
       await connection.execute(
         'UPDATE app_refresh_tokens SET revoked_at = NOW() WHERE user_id = ? AND revoked_at IS NULL',

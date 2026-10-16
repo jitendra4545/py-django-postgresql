@@ -1,6 +1,20 @@
 import { pool } from '../db/pool.js';
 
 const required = {
+  countries: ['id', 'name', 'code', 'status', 'deleted_at'],
+  cities: [
+    'id',
+    'name',
+    'country_id',
+    'status',
+    'lat',
+    'lng',
+    'additional_name_1',
+    'additional_name_2',
+    'additional_name_3',
+    'additional_name_4',
+    'deleted_at',
+  ],
   activity_logs: [
     'id',
     'subject_type',
@@ -113,6 +127,7 @@ const required = {
     'provider_id',
     'deleted_at',
   ],
+  vehicle_cities: ['id', 'vehicle_id', 'city_id', 'country', 'locality', 'deleted_at'],
   vehicle_classes: ['id', 'title', 'status'],
   vehicle_class_price_rates: [
     'id',

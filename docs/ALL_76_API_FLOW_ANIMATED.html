@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Drive Luxury — All 81 API Flows</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #07111f;
+        --panel: #101d30;
+        --text: #edf5ff;
+        --muted: #9db0c9;
+        --line: #2d4261;
+        --accent: #55d6be;
+        --blue: #78a8ff;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: radial-gradient(circle at top, #132a46, var(--bg) 52%);
+        color: var(--text);
+        font:
+          15px/1.5 system-ui,
+          sans-serif;
+      }
+      main {
+        width: min(1180px, 94vw);
+        margin: auto;
+        padding: 30px 0 56px;
+      }
+      h1 {
+        margin: 0;
+        font-size: clamp(26px, 5vw, 44px);
+      }
+      .lead {
+        color: var(--muted);
+        margin: 4px 0 20px;
+      }
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 9px;
+        align-items: end;
+        margin-bottom: 18px;
+      }
+      .field {
+        display: grid;
+        gap: 4px;
+      }
+      .field label {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      select,
+      input,
+      button {
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        background: var(--panel);
+        color: var(--text);
+        padding: 9px 12px;
+        font: inherit;
+      }
+      button {
+        cursor: pointer;
+      }
+      button.primary {
+        background: var(--accent);
+        color: #041510;
+        border-color: transparent;
+      }
+      .nav {
+        display: flex;
+        gap: 8px;
+        margin-left: auto;
+      }
+      .progress {
+        height: 6px;
+        background: var(--line);
+        margin: 14px 0 22px;
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .bar {
+        height: 100%;
+        background: var(--accent);
+        transition: width 0.35s;
+      }
+      .step {
+        display: grid;
+        grid-template-columns: 64px minmax(0, 1fr);
+        gap: 16px;
+        padding: 22px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .num {
+        width: 52px;
+        height: 52px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        background: var(--accent);
+        color: #041510;
+        font-weight: 750;
+        animation: pulse 1s ease-in-out infinite alternate;
+      }
+      .meta {
+        color: var(--blue);
+        font-weight: 650;
+      }
+      .path {
+        font:
+          600 16px/1.45 ui-monospace,
+          monospace;
+        overflow-wrap: anywhere;
+        margin: 6px 0;
+      }
+      .summary {
+        font-size: 19px;
+        margin: 4px 0;
+      }
+      .detail {
+        color: var(--muted);
+        margin: 5px 0;
+      }
+      .registry {
+        margin-top: 24px;
+      }
+      .registry h2 {
+        font-size: 19px;
+      }
+      .rows {
+        display: grid;
+        gap: 7px;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: 44px 80px minmax(0, 1fr) 120px;
+        gap: 10px;
+        align-items: center;
+        padding: 9px 0;
+        border-bottom: 1px solid var(--line);
+        opacity: 0.62;
+      }
+      .row.current {
+        opacity: 1;
+        color: var(--accent);
+      }
+      .method {
+        font-family: ui-monospace, monospace;
+      }
+      .count {
+        color: var(--muted);
+      }
+      @keyframes pulse {
+        to {
+          transform: scale(1.06);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          animation: none !important;
+          transition: none !important;
+        }
+      }
+      @media (max-width: 680px) {
+        .nav {
+          margin-left: 0;
+          width: 100%;
+        }
+        .step {
+          grid-template-columns: 46px 1fr;
+        }
+        .num {
+          width: 40px;
+          height: 40px;
+        }
+        .row {
+          grid-template-columns: 34px 60px 1fr;
+        }
+        .row span:last-child {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>All 81 APIs: frontend call flow</h1>
+      <p class="lead">
+        Filter by application or module, then play through when each endpoint is called and what
+        happens next.
+      </p>
+      <div class="toolbar">
+        <div class="field">
+          <label for="audience">Application</label
+          ><select id="audience">
+            <option>All</option>
+            <option>Client</option>
+            <option>Agent</option>
+            <option>Chauffeur</option>
+            <option>Operations</option>
+            <option>Platform</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="module">Module</label
+          ><select id="module">
+            <option>All</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="search">Find endpoint</label
+          ><input id="search" type="search" placeholder="booking, payment, profile…" />
+        </div>
+        <div class="nav">
+          <button id="prev">Previous</button><button id="play" class="primary">Play</button
+          ><button id="next">Next</button>
+        </div>
+      </div>
+      <div class="count" id="count" aria-live="polite"></div>
+      <div class="progress" role="progressbar" aria-label="Flow progress">
+        <div class="bar" id="bar"></div>
+      </div>
+      <section class="step" id="step" aria-live="polite"></section>
+      <section class="registry">
+        <h2>Endpoints in this view</h2>
+        <div class="rows" id="rows"></div>
+      </section>
+    </main>
+    <script>
+      const raw = `
+1|POST|/auth/client/register|Authentication|Client|Registration submit|Store session, verify with /auth/me, open Client Home
+2|POST|/auth/login|Authentication|Client,Agent,Chauffeur,Operations|Login submit with device/Expo token|Store tokens and route by returned role
+3|POST|/auth/refresh|Authentication|Client,Agent,Chauffeur,Operations|Access token expires|Rotate tokens and retry the original request once
+4|POST|/auth/logout|Authentication|Client,Agent,Chauffeur,Operations|Explicit sign out|Clear local session and return to Login
+5|GET|/auth/me|Authentication|Client,Agent,Chauffeur,Operations|App launch or long foreground return|Confirm active role and build navigation
+6|POST|/auth/password/forgot|Authentication|Client,Agent,Chauffeur,Operations|Forgot-password form submit|Show neutral accepted result
+7|POST|/auth/password/reset|Authentication|Client,Agent,Chauffeur,Operations|Reset deep-link form submit|Return to Login
+8|POST|/auth/invitations/accept|Authentication|Agent,Chauffeur|Invitation link activation|Set password then log in
+9|GET|/catalog/services|Catalog|Client,Agent|Home or Book screen opens|Render service cards and branch by booking mode
+10|GET|/catalog/countries|Catalog|Client,Agent|Instant service selected or manual country picker opens|Select countryId and load cities
+11|GET|/catalog/cities|Catalog|Client,Agent|Country selected or city search changes|Select cityId and coordinates
+12|GET|/catalog/location/resolve|Catalog|Client,Agent|Device coordinates are reverse-geocoded|Map country/city names to existing DB IDs
+13|GET|/catalog/vehicle-classes|Catalog|Client,Agent|Location, dates and passengers are complete|Select an available vehicle class
+14|GET|/catalog/options|Catalog|Extras step opens|Save option IDs and quantities
+15|POST|/bookings/drafts|Bookings|Client,Agent|Instant booking begins|Persist draftId locally
+16|GET|/bookings/drafts/{draftId}|Bookings|Client,Agent|Unfinished booking resumes|Rehydrate booking form
+17|PUT|/bookings/drafts/{draftId}/details|Bookings|Client,Agent|Trip/passenger/options form continues|Save complete draft and open Review
+18|POST|/bookings/drafts/{draftId}/quote|Bookings|Client,Agent|Review opens after details save|Show 30-minute quote and rechecked availability
+19|POST|/bookings/drafts/{draftId}/checkout|Bookings|Client,Agent|Pay/Confirm is tapped|Create reservation and Stripe PaymentIntent
+20|GET|/bookings|Bookings|Client,Agent|Bookings list/tab/pagination opens|Render accessible booking groups
+21|GET|/bookings/{reservationId}|Bookings|Client,Agent,Operations|Booking card or push deep link opens|Render legs, cost, timeline, assignment and payment
+22|POST|/bookings/{reservationId}/change-requests|Bookings|Client,Agent|Change form is confirmed|Show change requested and await Operations
+23|POST|/bookings/{reservationId}/cancellation-requests|Bookings|Client,Agent|Cancellation is confirmed|Show cancellation requested and await Operations
+24|POST|/bookings/vip-requests|Bookings|Client,Agent|Airport VIP form submits|Show manual request confirmation
+25|POST|/bookings/concierge-requests|Bookings|Client,Agent|Concierge form submits|Show manual request confirmation
+26|GET|/bookings/manual-requests/vip|Bookings|Client,Agent|VIP history opens or refreshes|Render request status and note
+27|GET|/bookings/manual-requests/concierge|Bookings|Client,Agent|Concierge history opens or refreshes|Render request status and note
+28|GET|/client/dashboard|Client|Client|Client Home opens or refreshes|Render live, upcoming and recent bookings
+29|GET|/client/profile|Client|Client|Profile opens|Populate supported fields
+30|PATCH|/client/profile|Client|Client|Profile Save is tapped|Update profile cache from response
+31|GET|/client/bookings/{reservationId}/tracking|Client|Client|Live tracking opens/refreshes|Show assignment, GPS and timeline
+32|GET|/client/bookings/{reservationId}/receipt|Client|Client|Receipt is opened|Render structured costs and payment
+33|GET|/agent/dashboard|Agency Agent|Agent|Agent Home opens/refreshes|Render roster, bookings, alerts and commission summary
+34|GET|/agent/clients|Agency Agent|Agent|Clients tab or booking client picker opens|Select managed client
+35|POST|/agent/clients|Agency Agent|Agent|Create Client form submits|Select created client and start booking
+36|GET|/agent/clients/{customerId}|Agency Agent|Agent|Managed Client card opens|Show contact data and actions
+37|GET|/agent/clients/{customerId}/bookings|Agency Agent|Agent|Managed Client Bookings opens|Render that client's bookings
+38|GET|/agent/commissions|Agency Agent|Agent|Commissions opens/refreshes|Display backend-created commission entries
+39|GET|/chauffeur/dashboard|Chauffeur|Chauffeur|Home opens, foregrounds or receives assignment push|Render offered/today/upcoming work
+40|GET|/chauffeur/assignments/{assignmentId}|Chauffeur|Chauffeur|Assignment card or push opens|Show trip/passenger details and permitted actions
+41|POST|/chauffeur/assignments/{assignmentId}/acknowledge|Chauffeur|Chauffeur|Accept is tapped|Refresh assignment and enable service controls
+42|POST|/chauffeur/assignments/{assignmentId}/decline|Chauffeur|Chauffeur|Decline reason is confirmed|Return to refreshed dashboard
+43|POST|/chauffeur/assignments/{assignmentId}/status|Chauffeur|Chauffeur|Each permitted ride action is tapped|Advance controlled server state
+44|POST|/chauffeur/assignments/{assignmentId}/location|Chauffeur|Chauffeur|Throttled GPS tick during active work|Accept asynchronously and continue driving UI
+45|POST|/chauffeur/assignments/{assignmentId}/expenses|Chauffeur|Chauffeur|Expense form submits after optional receipt upload|Show pending review expense
+46|POST|/chauffeur/assignments/{assignmentId}/incidents|Chauffeur|Chauffeur|Incident form submits|Show report and alert Operations
+47|GET|/chauffeur/history|Chauffeur|Chauffeur|History/Earnings opens|Render completed/cancelled work
+48|GET|/chauffeur/documents|Chauffeur|Chauffeur|Documents opens|List private Chauffeur files
+49|POST|/communication/bookings/{reservationId}/conversation|Communication|Client,Agent,Chauffeur,Operations|Chat opens from a booking|Store conversationId and load messages
+50|GET|/communication/conversations/{conversationId}/messages|Communication|Client,Agent,Chauffeur,Operations|Chat opens, paginates or reconnects|Render history and receive realtime additions
+51|POST|/communication/conversations/{conversationId}/messages|Communication|Client,Agent,Chauffeur,Operations|Text/document message sends|Replace optimistic item with server record
+52|POST|/communication/bookings/{reservationId}/masked-call|Communication|Client,Agent,Chauffeur,Operations|Call action is tapped|Launch configured temporary bridge
+53|GET|/payments/{paymentId}|Payments|Client,Agent,Operations|Stripe returns, app resumes or payment refreshes|Use backend-confirmed status
+54|POST|/payments/{paymentId}/mock-confirm|Payments|Platform|Local mock-mode test only|Simulate paid state; never production UI
+55|POST|/payments/{paymentId}/retry|Payments|Client,Agent|PaymentIntent setup failed and Retry is tapped|Confirm new client secret then poll payment
+56|POST|/payments/webhook|Payments|Platform|Stripe sends signed provider event|Verify, deduplicate and update payment/booking/refund
+57|GET|/notifications|Notifications|Client,Agent,Chauffeur,Operations|Inbox opens, refreshes or paginates|Render and route notification payloads
+58|POST|/notifications/{id}/read|Notifications|Client,Agent,Chauffeur,Operations|One unread notification opens|Decrease local unread count
+59|POST|/notifications/read-all|Notifications|Client,Agent,Chauffeur,Operations|Mark All Read is tapped|Clear unread indicators
+60|POST|/documents|Documents|Client,Agent,Chauffeur,Operations|Authorized file picker confirms upload|Use documentId in message/expense/incident
+61|GET|/documents/{id}/download|Documents|Client,Agent,Chauffeur,Operations|Private attachment is opened|Stream authorized bytes securely
+62|POST|/operations/agency-agents|Operations|Operations|Admin creates Agent invitation|Deliver invite; Agent activates through auth invitation API
+63|POST|/operations/chauffeurs|Operations|Operations|Admin creates Chauffeur invitation|Deliver invite; Chauffeur activates through auth invitation API
+64|GET|/operations/chauffeurs/available|Operations|Operations|Booking leg time/location are known|Select conflict-free Chauffeur
+65|POST|/operations/agent-client-assignments|Operations|Operations|Admin links existing client to Agent|Client appears in Agent roster
+66|GET|/operations/bookings/pending|Operations|Operations|Pending queue opens/refreshes|Open item for decision
+67|POST|/operations/bookings/{reservationId}/decision|Operations|Operations|Paid/pending booking is reviewed|Confirm/reject; confirmed booking proceeds to allocation
+68|POST|/operations/bookings/{reservationId}/legs/{detailId}/assign-chauffeur|Operations|Operations|Available Chauffeur is selected|Send Expo offer to Chauffeur
+69|GET|/operations/vehicles/available|Operations|Operations|Confirmed leg needs physical vehicle|Select local active conflict-free vehicle
+70|POST|/operations/bookings/{reservationId}/legs/{detailId}/assign-vehicle|Operations|Operations|Physical vehicle selection confirms|Transaction rechecks location/time and records allocation
+71|POST|/operations/change-requests/{requestId}/decision|Operations|Operations|Change request review submits|Apply/reprice approved change and handle difference
+72|POST|/operations/cancellation-requests/{requestId}/decision|Operations|Operations|Cancellation review submits|Cancel and create refund when applicable
+73|PATCH|/operations/expenses/{expenseId}|Operations|Operations|Expense review submits|Approve, reject or reimburse
+74|PATCH|/operations/incidents/{incidentId}|Operations|Operations|Incident investigation updates|Move to review/resolved/closed
+75|PATCH|/operations/vip-requests/{requestId}|Operations|Operations|VIP request is processed|Update status/note and notify requester
+76|PATCH|/operations/concierge-requests/{requestId}|Operations|Operations|Concierge request is processed|Update status/note and notify requester
+77|POST|/auth/google|Authentication|Client,Agent,Chauffeur|Google sign-in returns an ID token|Create/link a Client or sign in an existing active Agent/Chauffeur
+78|GET|/agent/profile|Agency Agent|Agent|Agent Profile opens or refreshes|Populate identity, agency, contact, address and language
+79|PATCH|/agent/profile|Agency Agent|Agent|Agent saves supported profile changes|Replace local profile data with the response
+80|GET|/chauffeur/profile|Chauffeur|Chauffeur|Chauffeur Profile opens or refreshes|Populate identity, location, contact, address and language
+81|PATCH|/chauffeur/profile|Chauffeur|Chauffeur|Chauffeur saves supported profile changes|Replace local profile data with the response`;
+      const all = raw
+        .trim()
+        .split('\n')
+        .map((line) => {
+          const [id, method, path, module, audience, when, next] = line.split('|');
+          return { id: +id, method, path, module, audience, when, next };
+        });
+      const audience = document.getElementById('audience'),
+        moduleSelect = document.getElementById('module'),
+        search = document.getElementById('search'),
+        step = document.getElementById('step'),
+        rows = document.getElementById('rows'),
+        count = document.getElementById('count'),
+        bar = document.getElementById('bar'),
+        play = document.getElementById('play');
+      let index = 0,
+        timer = null,
+        visible = all;
+      [...new Set(all.map((x) => x.module))].forEach((value) =>
+        moduleSelect.add(new Option(value, value)),
+      );
+      function filter() {
+        stop();
+        const q = search.value.trim().toLowerCase();
+        visible = all.filter(
+          (x) =>
+            (audience.value === 'All' || x.audience.split(',').includes(audience.value)) &&
+            (moduleSelect.value === 'All' || x.module === moduleSelect.value) &&
+            (!q || `${x.path} ${x.module} ${x.when} ${x.next}`.toLowerCase().includes(q)),
+        );
+        index = 0;
+        draw();
+      }
+      function draw() {
+        if (!visible.length) {
+          step.innerHTML =
+            '<div></div><div><div class="summary">No matching endpoints</div><p class="detail">Change the application, module or search.</p></div>';
+          rows.innerHTML = '';
+          count.textContent = '0 of 81 APIs';
+          bar.style.width = '0%';
+          return;
+        }
+        const x = visible[index];
+        step.innerHTML = `<div class="num">${x.id}</div><div><div class="meta">${x.module} · ${x.audience.replaceAll(',', ', ')}</div><div class="path">${x.method} ${x.path}</div><div class="summary">When: ${x.when}</div><p class="detail"><strong>Next:</strong> ${x.next}</p></div>`;
+        count.textContent = `Showing ${visible.length} of 81 APIs · step ${index + 1} of ${visible.length}`;
+        bar.style.width = `${((index + 1) / visible.length) * 100}%`;
+        bar.parentElement.setAttribute(
+          'aria-valuenow',
+          Math.round(((index + 1) / visible.length) * 100),
+        );
+        rows.innerHTML = visible
+          .map(
+            (r, i) =>
+              `<div class="row ${i === index ? 'current' : ''}"><span>${r.id}</span><span class="method">${r.method}</span><span>${r.path}</span><span>${r.module}</span></div>`,
+          )
+          .join('');
+      }
+      function stop() {
+        clearInterval(timer);
+        timer = null;
+        play.textContent = 'Play';
+      }
+      function advance() {
+        if (index >= visible.length - 1) {
+          stop();
+          return;
+        }
+        index++;
+        draw();
+      }
+      [audience, moduleSelect].forEach((el) => el.addEventListener('change', filter));
+      search.addEventListener('input', filter);
+      document.getElementById('next').addEventListener('click', () => {
+        stop();
+        index = Math.min(index + 1, visible.length - 1);
+        draw();
+      });
+      document.getElementById('prev').addEventListener('click', () => {
+        stop();
+        index = Math.max(index - 1, 0);
+        draw();
+      });
+      play.addEventListener('click', () => {
+        if (timer) {
+          stop();
+          return;
+        }
+        if (index === visible.length - 1) index = 0;
+        play.textContent = 'Pause';
+        draw();
+        timer = setInterval(advance, 1800);
+      });
+      draw();
+    </script>
+  </body>
+</html>
