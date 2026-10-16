@@ -1,7 +1,7 @@
 import js from '@eslint/js';
 
 export default [
-  { ignores: ['node_modules/**', 'coverage/**', 'uploads/**', 'api-console/**'] },
+  { ignores: ['node_modules/**', 'coverage/**', 'uploads/**'] },
   js.configs.recommended,
   {
     files: ['**/*.js'],
@@ -11,5 +11,15 @@ export default [
       globals: { console: 'readonly', process: 'readonly', Buffer: 'readonly', fetch: 'readonly' },
     },
     rules: { 'no-unused-vars': ['error', { argsIgnorePattern: '^_' }] },
+  },
+  {
+    files: ['public/**/*.js'],
+    languageOptions: {
+      globals: {
+        document: 'readonly',
+        URLSearchParams: 'readonly',
+        window: 'readonly',
+      },
+    },
   },
 ];

@@ -12,6 +12,7 @@ const walk = async (directory) => {
 };
 await walk('src');
 await walk('tests');
+await walk('public');
 for (const file of files) {
   const result = spawnSync(process.execPath, ['--check', file], { stdio: 'inherit' });
   if (result.status !== 0) process.exit(result.status ?? 1);

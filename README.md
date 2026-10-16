@@ -53,6 +53,8 @@ Swagger UI: `http://localhost:3000/docs`
 
 OpenAPI JSON: `http://localhost:3000/openapi.json`
 
+Browser password-reset page: `http://localhost:3000/reset-password?token=...`
+
 ## Deployment order
 
 1. Restore/snapshot the target database in staging.
@@ -92,19 +94,14 @@ OpenAPI JSON: `http://localhost:3000/openapi.json`
 - [Validation report](docs/VALIDATION_REPORT.md)
 - [Google login, password recovery and profile integration](docs/AUTH_AND_PROFILE_APIS.md)
 
-## React API console
-
-The [`api-console`](api-console/README.md) Vite React application provides
-separate Client/Agent, Chauffeur and Operations workspaces plus a runner for all
-81 documented APIs.
-
 ## Important integration notes
 
 - `PAYMENT_PROVIDER=mock` is for local development only. Use `PAYMENT_PROVIDER=stripe` for staging and production.
 - `.env.example` contains placeholders only. Never commit Stripe secret or webhook-signing keys.
 - Mobile apps must register an Expo push token in the existing login device payload.
 - The masked-call implementation is an adapter placeholder returning a development bridge number. Connect the selected telecom provider before production.
-- Password-reset email is delivered through authenticated SMTP. Invitation email delivery remains a separate follow-up integration.
+- Password-reset email is delivered through authenticated SMTP. The link opens the minimal same-domain `/reset-password` browser page, which submits the token and new password to the reset API. Invitation email delivery remains a separate follow-up integration.
+- The Render deployment trusts exactly one proxy hop so `express-rate-limit` can identify clients from Render's forwarded IP header.
 - Agent and Chauffeur Google login works only for an existing active invited account with the same verified email; Google login never self-registers those roles.
 - Existing historical reservations are not automatically visible because they lack `app_reservation_meta`. Plan a reviewed backfill if this is required.
 - Operations should call `GET /api/v1/operations/vehicles/available` with the class, country, optional city and service time window before assigning a physical vehicle. The assignment endpoint performs the same location and conflict checks again.

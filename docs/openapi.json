@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Drive Luxury Release 1 API",
-    "version": "2.1.0",
+    "version": "2.1.1",
     "description": "API contract for the Client + Agency Agent application, Chauffeur application, and back-office integration. Rental inspection and AI features are intentionally outside Release 1."
   },
   "servers": [{ "url": "/api/v1", "description": "Current server" }],

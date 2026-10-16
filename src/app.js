@@ -6,7 +6,7 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import swaggerUi from 'swagger-ui-express';
 import { readFileSync } from 'node:fs';
-import { URL } from 'node:url';
+import { fileURLToPath, URL } from 'node:url';
 import { env } from './config/env.js';
 import authRouter from './modules/auth.js';
 import catalogRouter from './modules/catalog.js';
@@ -22,9 +22,13 @@ import documentRouter from './modules/documents.js';
 import { errorHandler, notFoundHandler } from './middleware/error-handler.js';
 
 const openapi = JSON.parse(readFileSync(new URL('../docs/openapi.json', import.meta.url), 'utf8'));
+const publicDirectory = fileURLToPath(new URL('../public', import.meta.url));
+const resetPasswordPage = fileURLToPath(new URL('../public/reset-password.html', import.meta.url));
 const app = express();
-app.set('trust proxy', 1);
 
+// Render forwards public requests through one trusted proxy hop. This lets
+// Express and express-rate-limit use the real client IP from X-Forwarded-For.
+app.set('trust proxy', 1);
 app.disable('x-powered-by');
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'same-site' } }));
 app.use(cors({ origin: env.corsOrigins, credentials: true }));
@@ -41,7 +45,23 @@ app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 app.use(morgan(env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(rateLimit({ windowMs: 60_000, limit: 300, standardHeaders: true, legacyHeaders: false }));
 
-app.get('/health', (_request, response) => response.json({ status: 'ok', version: '2.1.0' }));
+app.get('/health', (_request, response) => response.json({ status: 'ok', version: '2.1.1' }));
+app.use(
+  '/reset-assets',
+  express.static(publicDirectory, {
+    dotfiles: 'deny',
+    index: false,
+    maxAge: env.NODE_ENV === 'production' ? '1d' : 0,
+  }),
+);
+app.get('/reset-password', (_request, response) => {
+  response.set({
+    'Cache-Control': 'no-store',
+    Pragma: 'no-cache',
+    'Referrer-Policy': 'no-referrer',
+  });
+  response.sendFile(resetPasswordPage);
+});
 app.use('/docs', swaggerUi.serve, swaggerUi.setup(openapi));
 app.get('/openapi.json', (_request, response) => response.json(openapi));
 

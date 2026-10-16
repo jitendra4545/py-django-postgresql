@@ -1,6 +1,6 @@
 {
   "name": "drive-luxury-backend-r1",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "private": true,
   "description": "Drive Luxury Release 1 API for Client, Agency Agent and Chauffeur applications",
   "type": "module",
@@ -20,9 +20,6 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "build": "npm run syntax:check && npm test",
-    "console:install": "npm --prefix api-console install",
-    "console:dev": "npm --prefix api-console run dev",
-    "console:build": "npm --prefix api-console run build",
     "seed:chauffeur-demo": "node scripts/seed-chauffeur-demo-bookings.js"
   },
   "dependencies": {

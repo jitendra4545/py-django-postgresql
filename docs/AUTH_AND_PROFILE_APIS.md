@@ -96,7 +96,14 @@ start unless SMTP is enabled.
 
 ### Complete the reset
 
-The frontend reads `token` from `PASSWORD_RESET_URL?token=...` and submits:
+The backend serves a minimal browser UI at:
+
+```text
+https://drive-luxury.onrender.com/reset-password?token=...
+```
+
+The page reads the token once, removes it from the address bar, validates the
+two password fields and submits:
 
 ```http
 POST /api/v1/auth/password/reset
@@ -205,9 +212,9 @@ MAIL_PASSWORD=provided-securely
 MAIL_FROM_ADDRESS=noreply@drive-luxury.com
 MAIL_FROM_NAME=Drive Luxury
 MAIL_REPLY_TO=support@drive-luxury.com
-PASSWORD_RESET_URL=https://app.drive-luxury.com/reset-password
+PASSWORD_RESET_URL=https://drive-luxury.onrender.com/reset-password
 ```
 
 Never commit real OAuth, SMTP, database or payment credentials. Configure them in
-the DigitalOcean environment/secret settings and rotate any credentials that were
-previously shared through ordinary messages.
+the deployment environment's secret settings and rotate any credentials that
+were previously shared through ordinary messages.

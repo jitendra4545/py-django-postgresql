@@ -27,7 +27,16 @@ const smtpTransport = () => {
       port: env.MAIL_PORT,
       secure: env.MAIL_ENCRYPTION === 'ssl',
       requireTLS: env.MAIL_ENCRYPTION === 'tls',
-      auth: { user: env.MAIL_USERNAME, pass: env.MAIL_PASSWORD },
+      auth: {
+        user: env.MAIL_USERNAME,
+        pass: env.MAIL_PASSWORD,
+      },
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 20_000,
+      tls: {
+        minVersion: 'TLSv1.2',
+      },
     });
   }
   return transporter;
@@ -70,7 +79,6 @@ export const buildPasswordResetMessage = ({ fullName, token }) => {
 };
 
 export const sendPasswordResetEmail = async ({ to, fullName, token }) => {
-  console.log(to,fullName,token)
   const transport = smtpTransport();
   if (!transport) {
     throw new AppError(503, 'EMAIL_NOT_CONFIGURED', 'Email delivery is not configured');

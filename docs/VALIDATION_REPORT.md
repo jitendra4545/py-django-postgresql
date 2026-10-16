@@ -7,11 +7,11 @@ Validated on 2026-10-16 with Node.js 24.19.0 in the build workspace.
 - `npm run build`: syntax, OpenAPI coverage, and the full automated test suite passed.
 - `npm run lint`: no ESLint errors.
 - `npm run format:check`: all project files match Prettier rules.
-- `npm test`: **10 files and 32 tests passed**.
-- `npm run syntax:check`: **56 JavaScript files** passed Node syntax validation.
+- `npm test`: **11 files and 35 tests passed**.
+- `npm run syntax:check`: **58 JavaScript files** passed Node syntax validation.
 - OpenAPI coverage: all **81 implemented HTTP operations** are documented.
-- React API console ESLint and production build completed successfully and expose all **81 operations**.
-- `npm audit` and production-only audits for the backend and API console: **0 known vulnerabilities**.
+- Browser reset page route, static assets, no-store policy, and Render proxy-hop configuration are covered by integration tests.
+- `npm audit` and the production-only backend audit: **0 known vulnerabilities**.
 - Application import/startup construction passed with valid test environment values.
 - Express 5 query validation is covered by a regression test.
 - Google payload verification rules, password-reset email generation, and partial profile updates are covered by tests.
