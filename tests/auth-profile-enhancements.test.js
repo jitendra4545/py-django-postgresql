@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 
 let buildPasswordResetMessage;
+let buildInvitationMessage;
 let normalizeGooglePayload;
 let buildProfileUpdate;
 
@@ -8,7 +9,8 @@ beforeAll(async () => {
   process.env.NODE_ENV = 'test';
   process.env.JWT_ACCESS_SECRET = 'test-access-secret-that-is-at-least-32-characters';
   process.env.JWT_REFRESH_SECRET = 'test-refresh-secret-that-is-at-least-32-characters';
-  ({ buildPasswordResetMessage } = await import('../src/services/email.js'));
+  ({ buildPasswordResetMessage, buildInvitationMessage } =
+    await import('../src/services/email.js'));
   ({ normalizeGooglePayload } = await import('../src/services/google-auth.js'));
   ({ buildProfileUpdate } = await import('../src/services/profile-updates.js'));
 });
@@ -46,6 +48,19 @@ describe('SMTP password reset content', () => {
     expect(message.subject).toContain('Reset');
     expect(message.text).toContain('reset-token-123');
     expect(message.html).toContain('reset-token-123');
+    expect(message.html).toContain('A &amp; B');
+  });
+});
+
+describe('invitation email content', () => {
+  it('builds a seven-day Agent activation link and escapes display names', () => {
+    const message = buildInvitationMessage({
+      fullName: 'A & B',
+      token: 'invitation-token-123',
+      role: 'AGENCY_AGENT',
+    });
+    expect(message.subject).toContain('Agency Agent');
+    expect(message.text).toContain('invitation-token-123');
     expect(message.html).toContain('A &amp; B');
   });
 });

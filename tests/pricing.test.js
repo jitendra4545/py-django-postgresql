@@ -32,8 +32,8 @@ describe('pricing arithmetic', () => {
     });
     expect(result.baseRate).toBe(200);
     expect(result.taxableOptions).toBe(40);
-    expect(result.nonTaxableOptions).toBe(10);
+    expect(result.nonTaxableOptions).toBe(5);
     expect(result.totalTax).toBe(24);
-    expect(result.total).toBe(274);
+    expect(result.total).toBe(269);
   });
 });

@@ -6,6 +6,7 @@ import { env } from '../config/env.js';
 import { one, transaction } from '../db/pool.js';
 import { getReservationForAccess } from '../services/access.js';
 import { notifyBookingAudience } from '../services/notifications.js';
+import { releasePendingHold } from '../services/payment-holds.js';
 import {
   constructWebhookEvent,
   createPaymentIntent,
@@ -51,6 +52,11 @@ router.post(
     if (!status) status = payment.status;
 
     await transaction(async (connection) => {
+      const [lockedPayments] = await connection.execute(
+        'SELECT status FROM app_payment_transactions WHERE id=? FOR UPDATE',
+        [payment.id],
+      );
+      const previousStatus = lockedPayments[0]?.status;
       await connection.execute(
         `INSERT INTO app_payment_webhook_events (provider,provider_event_id,payload,received_at) VALUES (?,?,?,NOW())`,
         [payment.provider, event.id, raw.toString('utf8')],
@@ -59,15 +65,33 @@ router.post(
         `UPDATE app_payment_transactions SET status=?,provider_payload=?,updated_at=NOW() WHERE id=?`,
         [status, JSON.stringify(object), payment.id],
       );
-      if (status === 'PAID' && payment.status !== 'PAID') {
-        await connection.execute(
-          'UPDATE reservations SET payment_status=1,updated_at=NOW() WHERE id=?',
+      if (status === 'CANCELLED') {
+        await releasePendingHold(connection, payment.reservation_id);
+      }
+      if (status === 'PAID' && previousStatus !== 'PAID') {
+        const [reservations] = await connection.execute(
+          `SELECT r.status,arm.lifecycle_status FROM reservations r
+            JOIN app_reservation_meta arm ON arm.reservation_id=r.id
+           WHERE r.id=? FOR UPDATE`,
           [payment.reservation_id],
+        );
+        // A late success after an expired/cancelled hold cannot resurrect a
+        // reservation or reallocate its released vehicle. Reconcile manually.
+        if (
+          !reservations[0] ||
+          reservations[0].status === 3 ||
+          !['PAYMENT_PENDING', 'CHANGE_PAYMENT_PENDING'].includes(reservations[0].lifecycle_status)
+        ) {
+          return;
+        }
+        await connection.execute(
+          'UPDATE reservations SET payment_status=?,status=1,updated_at=NOW() WHERE id=?',
+          [env.LEGACY_PAID_PAYMENT_STATUS, payment.reservation_id],
         );
         await connection.execute(
           `UPDATE app_reservation_meta
               SET lifecycle_status=CASE
-                    WHEN lifecycle_status='PAYMENT_PENDING' THEN 'PENDING_CONFIRMATION'
+                    WHEN lifecycle_status='PAYMENT_PENDING' THEN 'CONFIRMED'
                     WHEN lifecycle_status='CHANGE_PAYMENT_PENDING' THEN 'CONFIRMED'
                     ELSE lifecycle_status
                   END,
@@ -88,7 +112,7 @@ router.post(
           ],
         );
         await connection.execute(
-          `INSERT INTO app_booking_status_events (reservation_id,status,actor_user_id,note,occurred_at,created_at) VALUES (?,'PAYMENT_CONFIRMED',?,'Payment confirmed',NOW(),NOW())`,
+          `INSERT INTO app_booking_status_events (reservation_id,status,actor_user_id,note,occurred_at,created_at) VALUES (?,'CONFIRMED',?,'Stripe payment confirmed',NOW(),NOW())`,
           [payment.reservation_id, payment.user_id],
         );
       }
@@ -130,6 +154,10 @@ router.post(
           await connection.execute('DELETE FROM vehicle_reserved_dates WHERE reservation_id=?', [
             payment.reservation_id,
           ]);
+          await connection.execute(
+            'UPDATE reservation_vehicles SET status=2,deleted_at=NOW(),updated_at=NOW() WHERE reservation_id=? AND status=1',
+            [payment.reservation_id],
+          );
         }
       }
     });
@@ -209,11 +237,11 @@ router.post(
           [payment.id],
         );
         await connection.execute(
-          'UPDATE reservations SET payment_status=1,updated_at=NOW() WHERE id=?',
-          [payment.reservation_id],
+          'UPDATE reservations SET payment_status=?,status=1,updated_at=NOW() WHERE id=?',
+          [env.LEGACY_PAID_PAYMENT_STATUS, payment.reservation_id],
         );
         await connection.execute(
-          `UPDATE app_reservation_meta SET lifecycle_status='PENDING_CONFIRMATION',updated_at=NOW() WHERE reservation_id=?`,
+          `UPDATE app_reservation_meta SET lifecycle_status='CONFIRMED',updated_at=NOW() WHERE reservation_id=?`,
           [payment.reservation_id],
         );
         await connection.execute(

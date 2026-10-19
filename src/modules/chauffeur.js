@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../common/async-handler.js';
 import { requireAuth, requireRoles } from '../common/auth.js';
-import { conflict, notFound } from '../common/errors.js';
+import { AppError, conflict, notFound } from '../common/errors.js';
 import { pageResponse, pagination } from '../common/pagination.js';
 import { assertAssignmentTransition } from '../common/state-machine.js';
 import { validate } from '../common/validate.js';
@@ -11,6 +11,8 @@ import { one, query, transaction } from '../db/pool.js';
 import { notifyBookingAudience } from '../services/notifications.js';
 import { updateProfileTable } from '../services/profile-updates.js';
 import { emitToUser } from '../services/realtime.js';
+import { env } from '../config/env.js';
+import { locationIntervalDecision } from '../services/tracking.js';
 
 const router = Router();
 router.use(requireAuth, requireRoles(ROLES.CHAUFFEUR));
@@ -280,28 +282,60 @@ router.post(
     }),
   ),
   asyncHandler(async (request, response) => {
-    const assignment = await assignmentFor(request.auth, request.params.assignmentId);
-    if (TERMINAL_ASSIGNMENT_STATUSES.includes(assignment.status) || assignment.status === 'OFFERED')
-      throw conflict('Location sharing is not active for this assignment');
     const recordedAt = new Date(request.body.recordedAt);
     if (
       recordedAt > new Date(Date.now() + 5 * 60_000) ||
       recordedAt < new Date(Date.now() - 24 * 60 * 60_000)
     )
       throw conflict('Location timestamp is outside the accepted range');
-    await query(
-      `INSERT INTO app_driver_locations (assignment_id,driver_id,latitude,longitude,heading,speed,accuracy,recorded_at,created_at) VALUES (?,?,?,?,?,?,?,?,NOW())`,
-      [
-        assignment.id,
-        request.auth.driverId,
-        request.body.latitude,
-        request.body.longitude,
-        request.body.heading ?? null,
-        request.body.speed ?? null,
-        request.body.accuracy ?? null,
-        request.body.recordedAt.slice(0, 19).replace('T', ' '),
-      ],
-    );
+    const assignment = await transaction(async (connection) => {
+      const lockedAssignment = await assignmentFor(
+        request.auth,
+        request.params.assignmentId,
+        connection,
+        true,
+      );
+      if (
+        TERMINAL_ASSIGNMENT_STATUSES.includes(lockedAssignment.status) ||
+        lockedAssignment.status === 'OFFERED'
+      ) {
+        throw conflict('Location sharing is not active for this assignment');
+      }
+      const [locations] = await connection.execute(
+        `SELECT recorded_at AS recordedAt FROM app_driver_locations
+          WHERE assignment_id=? ORDER BY recorded_at DESC LIMIT 1`,
+        [lockedAssignment.id],
+      );
+      const decision = locationIntervalDecision(locations[0]?.recordedAt, recordedAt);
+      if (!decision.accepted && decision.reason === 'NOT_NEWER') {
+        throw new AppError(
+          409,
+          'LOCATION_NOT_NEWER',
+          'The GPS sample is older than the latest sample',
+        );
+      }
+      if (!decision.accepted) {
+        throw new AppError(429, 'LOCATION_THROTTLED', 'GPS updates are arriving too frequently', {
+          retryAfterSeconds: decision.retryAfterSeconds,
+        });
+      }
+      await connection.execute(
+        `INSERT INTO app_driver_locations
+          (assignment_id,driver_id,latitude,longitude,heading,speed,accuracy,recorded_at,created_at)
+         VALUES (?,?,?,?,?,?,?,?,NOW())`,
+        [
+          lockedAssignment.id,
+          request.auth.driverId,
+          request.body.latitude,
+          request.body.longitude,
+          request.body.heading ?? null,
+          request.body.speed ?? null,
+          request.body.accuracy ?? null,
+          request.body.recordedAt.slice(0, 19).replace('T', ' '),
+        ],
+      );
+      return lockedAssignment;
+    });
     const viewers = await query(
       `SELECT DISTINCT u.id AS userId
          FROM reservations r JOIN customers c ON c.id=r.customer_id JOIN users u ON u.id=c.user_id
@@ -316,10 +350,15 @@ router.post(
       emitToUser(viewer.userId, 'assignment.location', {
         assignmentId: assignment.id,
         reservationId: assignment.reservation_id,
+        staleAfterSeconds: env.GPS_STALE_AFTER_SECONDS,
         ...request.body,
       });
     }
-    response.status(202).json({ accepted: true });
+    response.status(202).json({
+      accepted: true,
+      minimumIntervalSeconds: env.GPS_MIN_INTERVAL_SECONDS,
+      staleAfterSeconds: env.GPS_STALE_AFTER_SECONDS,
+    });
   }),
 );
 

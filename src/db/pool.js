@@ -5,7 +5,11 @@ import { env } from '../config/env.js';
 const ssl = env.DB_SSL
   ? {
       rejectUnauthorized: true,
-      ...(env.DB_SSL_CA_PATH ? { ca: fs.readFileSync(env.DB_SSL_CA_PATH, 'utf8') } : {}),
+      ...(env.DB_SSL_CA_PATH
+        ? { ca: fs.readFileSync(env.DB_SSL_CA_PATH, 'utf8') }
+        : env.DB_SSL_CA_BASE64
+          ? { ca: Buffer.from(env.DB_SSL_CA_BASE64, 'base64').toString('utf8') }
+          : {}),
     }
   : undefined;
 

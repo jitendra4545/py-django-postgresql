@@ -45,7 +45,8 @@ describe('vehicle availability compatibility', () => {
 
   it('rechecks location-aware inventory when approved booking changes are applied', () => {
     const bookingChanges = fs.readFileSync('src/services/booking-change-service.js', 'utf8');
-    expect(bookingChanges).toContain('hasAvailableVehicle');
+    expect(bookingChanges).toContain('listAvailableVehicles');
+    expect(bookingChanges).toContain('FOR UPDATE');
     expect(bookingChanges).toContain('countryId: pickup.countryId');
     expect(bookingChanges).toContain('cityId: pickup.cityId');
     expect(bookingChanges).toContain('connection,');

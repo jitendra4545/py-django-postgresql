@@ -26,7 +26,7 @@ const publicDirectory = fileURLToPath(new URL('../public', import.meta.url));
 const resetPasswordPage = fileURLToPath(new URL('../public/reset-password.html', import.meta.url));
 const app = express();
 
-// Render forwards public requests through one trusted proxy hop. This lets
+// DigitalOcean App Platform forwards public requests through one trusted proxy hop. This lets
 // Express and express-rate-limit use the real client IP from X-Forwarded-For.
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
@@ -45,7 +45,7 @@ app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 app.use(morgan(env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(rateLimit({ windowMs: 60_000, limit: 300, standardHeaders: true, legacyHeaders: false }));
 
-app.get('/health', (_request, response) => response.json({ status: 'ok', version: '2.1.1' }));
+app.get('/health', (_request, response) => response.json({ status: 'ok', version: '2.3.0' }));
 app.use(
   '/reset-assets',
   express.static(publicDirectory, {

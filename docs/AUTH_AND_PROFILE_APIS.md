@@ -99,7 +99,7 @@ start unless SMTP is enabled.
 The backend serves a minimal browser UI at:
 
 ```text
-https://drive-luxury.onrender.com/reset-password?token=...
+https://api.example.com/reset-password?token=...
 ```
 
 The page reads the token once, removes it from the address bar, validates the
@@ -212,7 +212,7 @@ MAIL_PASSWORD=provided-securely
 MAIL_FROM_ADDRESS=noreply@drive-luxury.com
 MAIL_FROM_NAME=Drive Luxury
 MAIL_REPLY_TO=support@drive-luxury.com
-PASSWORD_RESET_URL=https://drive-luxury.onrender.com/reset-password
+PASSWORD_RESET_URL=https://api.example.com/reset-password
 ```
 
 Never commit real OAuth, SMTP, database or payment credentials. Configure them in

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Drive Luxury — All 81 API Flows</title>
+    <title>Drive Luxury — All 86 API Flows</title>
     <style>
       :root {
         color-scheme: light dark;
@@ -189,7 +189,7 @@
   </head>
   <body>
     <main>
-      <h1>All 81 APIs: frontend call flow</h1>
+      <h1>All 86 APIs: frontend call flow</h1>
       <p class="lead">
         Filter by application or module, then play through when each endpoint is called and what
         happens next.
@@ -313,7 +313,12 @@
 78|GET|/agent/profile|Agency Agent|Agent|Agent Profile opens or refreshes|Populate identity, agency, contact, address and language
 79|PATCH|/agent/profile|Agency Agent|Agent|Agent saves supported profile changes|Replace local profile data with the response
 80|GET|/chauffeur/profile|Chauffeur|Chauffeur|Chauffeur Profile opens or refreshes|Populate identity, location, contact, address and language
-81|PATCH|/chauffeur/profile|Chauffeur|Chauffeur|Chauffeur saves supported profile changes|Replace local profile data with the response`;
+81|PATCH|/chauffeur/profile|Chauffeur|Chauffeur|Chauffeur saves supported profile changes|Replace local profile data with the response
+82|GET|/bookings/{reservationId}/tracking|Bookings|Client,Agent|Live tracking opens or reconnects|Render assignments, stale-location state and timeline
+83|GET|/bookings/{reservationId}/invoices|Bookings|Client,Agent|Booking invoices open|Render configured legacy invoice metadata or an explicit unavailable state
+84|GET|/communication/conversations|Communication|Client,Agent,Chauffeur,Operations|Messages inbox opens or reconnects|Render conversations and server unread counts
+85|POST|/communication/conversations/{conversationId}/read|Communication|Client,Agent,Chauffeur,Operations|Visible messages are consumed|Clear unread state and broadcast read time
+86|POST|/operations/invitations/{userId}/resend|Operations|Operations|An invitation expired or delivery is retried|Expire older links and send one new seven-day link`;
       const all = raw
         .trim()
         .split('\n')
@@ -352,13 +357,13 @@
           step.innerHTML =
             '<div></div><div><div class="summary">No matching endpoints</div><p class="detail">Change the application, module or search.</p></div>';
           rows.innerHTML = '';
-          count.textContent = '0 of 81 APIs';
+          count.textContent = '0 of 86 APIs';
           bar.style.width = '0%';
           return;
         }
         const x = visible[index];
         step.innerHTML = `<div class="num">${x.id}</div><div><div class="meta">${x.module} · ${x.audience.replaceAll(',', ', ')}</div><div class="path">${x.method} ${x.path}</div><div class="summary">When: ${x.when}</div><p class="detail"><strong>Next:</strong> ${x.next}</p></div>`;
-        count.textContent = `Showing ${visible.length} of 81 APIs · step ${index + 1} of ${visible.length}`;
+        count.textContent = `Showing ${visible.length} of 86 APIs · step ${index + 1} of ${visible.length}`;
         bar.style.width = `${((index + 1) / visible.length) * 100}%`;
         bar.parentElement.setAttribute(
           'aria-valuenow',

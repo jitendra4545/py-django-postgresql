@@ -10,35 +10,40 @@ Run `npm run verify:schema` before migration/deployment. It validates the legacy
 
 ## Existing tables used without alteration
 
-| Existing table                       | Release 1 use                                                                               |
-| ------------------------------------ | ------------------------------------------------------------------------------------------- |
-| `users`                              | Authentication and legacy role IDs: Admin 1, Staff 2, Chauffeur 3, Agency Agent 4, Client 5 |
-| `customers`                          | Client profile and agency relationship                                                      |
-| `agents`                             | Agency administrators/members; never rental inspectors                                      |
-| `agencies`                           | Agency status and commission percentage                                                     |
-| `drivers`                            | Chauffeur profile                                                                           |
-| `countries`                          | Active country IDs and ISO-style codes used by booking/catalog requests                     |
-| `cities`                             | Active city IDs, aliases, and coordinates filtered by country                               |
-| `services`                           | Legacy service linkage (Transfer 7, Chauffeur 8, Car Rental 10 in supplied dump)            |
-| `vehicle_classes`                    | Client-facing vehicle-class selection                                                       |
-| `vehicles`                           | Physical fleet inventory; only status 1 and online-bookable rows are eligible               |
-| `vehicle_class_countries`            | Country eligibility for classes                                                             |
-| `vehicle_class_price_rates`          | Configured class prices                                                                     |
-| `rental_options`                     | Extras/options                                                                              |
-| `tax_surecharges`                    | Percentage tax/surcharge configuration                                                      |
-| `reservations`                       | Booking header                                                                              |
-| `reservation_details`                | One record per itinerary/service leg                                                        |
-| `reservation_itineraries`            | Ordered intermediate/drop-off stops                                                         |
-| `reservation_costs`                  | Per-leg price totals                                                                        |
-| `reservation_payments`               | Approved legacy payment ledger entry                                                        |
-| `reservation_drivers`                | Legacy chauffeur allocation bridge                                                          |
-| `reservation_vehicles`               | Physical vehicle allocated by operations                                                    |
-| `vehicle_reserved_dates`             | Physical-vehicle calendar block                                                             |
-| `vehicle_blocks`                     | Existing maintenance/manual unavailability periods used by availability checks              |
-| `vehicle_status_update_logs`         | Existing fleet status history retained for website/back-office compatibility                |
-| `reservation_temp_vehicle_histories` | Existing history of replacement vehicles per reservation leg                                |
-| `activity_logs`                      | Existing audit log used for operational booking decisions and vehicle changes               |
-| `agency_commissions`                 | Backend-generated per-leg agency commissions                                                |
+| Existing table                                                    | Release 1 use                                                                                               |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `users`                                                           | Authentication and legacy role IDs: Admin 1, Staff 2, Chauffeur 3, Agency Agent 4, Client 5                 |
+| `customers`                                                       | Client profile and agency relationship                                                                      |
+| `agents`                                                          | Agency administrators/members; never rental inspectors                                                      |
+| `agencies`                                                        | Agency status and commission percentage                                                                     |
+| `drivers`                                                         | Chauffeur profile                                                                                           |
+| `countries`                                                       | Active country IDs and ISO-style codes used by booking/catalog requests                                     |
+| `cities`                                                          | Active city IDs, aliases, and coordinates filtered by country                                               |
+| `services`                                                        | Existing website service catalog; mobile `reservations.service_type` uses Chauffeur 1, Rental 2, Transfer 3 |
+| `vehicle_classes`                                                 | Client-facing vehicle-class selection                                                                       |
+| `vehicles`                                                        | Physical fleet inventory; only status 1 and online-bookable rows are eligible                               |
+| `vehicle_class_countries`                                         | Country eligibility for classes                                                                             |
+| `vehicle_class_price_rates`                                       | Country/season/duration class prices and transfer distance fallback                                         |
+| `rental_seasons`, `rental_durations`                              | Pickup-date season and closest active duration band                                                         |
+| `transfer_city_wise_prices`, `vehicle_class_city_wise_base_rates` | Transfer city-pair and country/distance prices                                                              |
+| `vehicle_service_types`, `vehicle_cities`                         | Eligible service and physical pickup location                                                               |
+| `rental_option_classes`                                           | Per-class eligibility for optional extras                                                                   |
+| `rental_options`                                                  | Extras/options                                                                                              |
+| `tax_surecharges`                                                 | Percentage tax/surcharge configuration                                                                      |
+| `reservations`                                                    | Booking header                                                                                              |
+| `reservation_details`                                             | One record per itinerary/service leg                                                                        |
+| `reservation_itineraries`                                         | Ordered intermediate/drop-off stops                                                                         |
+| `reservation_costs`                                               | Per-leg price totals                                                                                        |
+| `reservation_payments`                                            | Approved legacy payment ledger entry                                                                        |
+| `reservation_drivers`                                             | Legacy chauffeur allocation bridge                                                                          |
+| `reservation_vehicles`                                            | Physical vehicle reserved at checkout; Operations can reassign later                                        |
+| `vehicle_reserved_dates`                                          | Physical-vehicle calendar block                                                                             |
+| `vehicle_blocks`                                                  | Existing maintenance/manual unavailability periods used by availability checks                              |
+| `vehicle_status_update_logs`                                      | Existing fleet status history retained for website/back-office compatibility                                |
+| `reservation_temp_vehicle_histories`                              | Existing history of replacement vehicles per reservation leg                                                |
+| `activity_logs`                                                   | Existing audit log used for operational booking decisions and vehicle changes                               |
+| `agency_commissions`                                              | Operations-owned; read-only for Agent app                                                                   |
+| `reservation_invoices`, `reservation_invoice_details`             | Operations-owned invoices shown read-only in mobile                                                         |
 
 The availability rule is strict: only `vehicles.status = 1` (Available),
 `online_booking_status = 1`, and non-deleted vehicles are eligible. Statuses 0 and
@@ -55,7 +60,7 @@ or agent choices.
 | `app_user_devices`                  | Unique `device_id`, unique `push_token`, `user_id`                             | One-owner device and push registration               |
 | `app_password_reset_tokens`         | Unique `token_hash`, expiry/used timestamps                                    | Password reset lifecycle                             |
 | `app_user_oauth_accounts`           | Unique provider subject and unique `(user_id, provider)`                       | Verified Google identity linkage                     |
-| `app_account_invitations`           | Unique `token_hash`, `role`, `user_id`, expiry                                 | Approved Agent/Chauffeur onboarding                  |
+| `app_account_invitations`           | Unique `token_hash`, `role`, `user_id`, expiry, send count/time                | Approved Agent/Chauffeur onboarding and resend audit |
 | `app_agent_customer_assignments`    | Unique `(agent_id, customer_id)`, `agency_id`, preferences                     | Personal client roster and authorization boundary    |
 | `app_booking_drafts`                | Creator/client/agency, `service_code`, JSON `details`, `revision`              | Multi-step booking form state                        |
 | `app_quote_snapshots`               | `draft_id`, revision/hash, decimal total, JSON breakdown, expiry               | Immutable checkout price                             |
@@ -64,7 +69,7 @@ or agent choices.
 | `app_driver_assignments`            | Driver schedule index, reservation/detail IDs, state/timestamps                | Chauffeur assignment and acknowledgment              |
 | `app_booking_status_events`         | Reservation/detail/assignment indexes, status/time/location                    | Append-only tracking timeline                        |
 | `app_driver_locations`              | `(assignment_id, recorded_at)` and `(driver_id, recorded_at)` indexes          | Time-series GPS data                                 |
-| `app_documents`                     | Owner/reservation indexes, private storage key, MIME/size/expiry               | Protected receipts, licences and service documents   |
+| `app_documents`                     | Owner/reservation indexes, storage key, visibility, MIME/size/expiry           | Protected documents and explicit media visibility    |
 | `app_driver_expenses`               | Assignment/reservation/driver, decimal amount, review state                    | Expense submission and reimbursement review          |
 | `app_incidents`                     | Reservation/assignment, severity, evidence IDs, resolution                     | Operational and safety incident workflow             |
 | `app_booking_change_requests`       | Reservation/status index, prior lifecycle state, JSON changes, resolver        | Safe modifications without direct client mutation    |
@@ -86,11 +91,13 @@ All new monetary values use `DECIMAL(12,2)` plus a three-letter ISO currency cod
 
 `tax_surecharges.amount` is confirmed and implemented as a percentage. For example, `5` means **5%**, calculated over the taxable base.
 
-Agency commissions use `agencies.commission` as a percentage. The backend creates one `agency_commissions` record per active reservation leg and recalculates non-custom commission rows after an approved booking change.
+Agency commissions are not calculated or written by the mobile backend. Operations manages the legacy `agency_commissions` rows and the Agent app reads the recorded amount.
 
 ## Migration safety
 
-- The migration is additive and does not rename/drop legacy objects.
+- Migrations `001` and `002` are additive and do not rename/drop legacy objects.
+- Migration `003` changes only app-owned tables: it renames existing app document storage values from `s3` to `spaces`, adds explicit private/public visibility, and records invitation delivery attempts. It does not alter a legacy website table.
+- Migration `004` corrects only app-owned service mapping rows to `reservations.service_type`: Chauffeur 1, Rental 2, Transfer 3.
 - Foreign keys are applied for new tables where legacy PK types are compatible.
 - Applied migrations are checksum-protected.
 - MySQL DDL performs implicit commits; take a backup and run first in staging even though the runner groups statements transactionally.

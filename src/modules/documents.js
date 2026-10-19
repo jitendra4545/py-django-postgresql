@@ -56,8 +56,8 @@ router.post(
     const result = await query(
       `INSERT INTO app_documents
       (owner_user_id, reservation_id, category, original_name, storage_disk, storage_key,
-       mime_type, size_bytes, expires_at, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+       visibility, mime_type, size_bytes, expires_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'PRIVATE', ?, ?, ?, NOW(), NOW())`,
       [
         request.auth.userId,
         reservationId,
@@ -94,7 +94,13 @@ router.get(
     ]);
     if (!document) throw notFound('Document not found');
     await assertDocumentAccess(request, document);
-    if (document.storage_disk === 's3')
+    if (document.expires_at && new Date(document.expires_at) < new Date()) {
+      throw new AppError(410, 'DOCUMENT_EXPIRED', 'This document is no longer available');
+    }
+    if (document.visibility !== 'PRIVATE') {
+      throw forbidden('Public media is not downloadable through the private document API');
+    }
+    if (['spaces', 's3'].includes(document.storage_disk))
       return response.redirect(await signedDownloadUrl(document.storage_key));
     const path = localFilePath(document.storage_key);
     if (!fs.existsSync(path)) throw notFound('Stored document file not found');

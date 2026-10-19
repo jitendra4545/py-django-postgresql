@@ -8,6 +8,7 @@ import { one, query, transaction } from '../db/pool.js';
 import { getReservationForAccess } from '../services/access.js';
 import { loadBookingView } from '../services/booking-view.js';
 import { updateProfileTable } from '../services/profile-updates.js';
+import { loadTrackingView } from '../services/tracking.js';
 
 const router = Router();
 router.use(requireAuth, requireRoles(ROLES.CLIENT));
@@ -124,24 +125,7 @@ router.get(
   '/bookings/:reservationId/tracking',
   asyncHandler(async (request, response) => {
     await getReservationForAccess(request.auth, request.params.reservationId);
-    const assignment = await one(
-      `SELECT ada.id, ada.status, d.full_name AS chauffeurName, d.photo AS chauffeurPhoto
-       FROM app_driver_assignments ada JOIN drivers d ON d.id=ada.driver_id
-      WHERE ada.reservation_id=? AND ada.status NOT IN ('DECLINED','CANCELLED')
-      ORDER BY ada.updated_at DESC LIMIT 1`,
-      [request.params.reservationId],
-    );
-    const location = assignment
-      ? await one(
-          `SELECT latitude, longitude, heading, speed, accuracy, recorded_at AS recordedAt FROM app_driver_locations WHERE assignment_id=? ORDER BY recorded_at DESC LIMIT 1`,
-          [assignment.id],
-        )
-      : null;
-    const timeline = await query(
-      `SELECT status, note, occurred_at AS occurredAt FROM app_booking_status_events WHERE reservation_id=? ORDER BY occurred_at`,
-      [request.params.reservationId],
-    );
-    response.json({ assignment, location, timeline });
+    response.json(await loadTrackingView(request.params.reservationId));
   }),
 );
 

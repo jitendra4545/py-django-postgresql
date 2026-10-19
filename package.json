@@ -1,6 +1,6 @@
 {
   "name": "drive-luxury-backend-r1",
-  "version": "2.1.1",
+  "version": "2.3.0",
   "private": true,
   "description": "Drive Luxury Release 1 API for Client, Agency Agent and Chauffeur applications",
   "type": "module",

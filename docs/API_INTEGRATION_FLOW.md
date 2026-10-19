@@ -50,7 +50,7 @@ sequenceDiagram
     O->>API: Find and assign chauffeur
     API-->>D: Assignment push notification
     D->>API: Acknowledge and update ride status
-    C->>API: GET /client/bookings/{id}/tracking
+    C->>API: GET /bookings/{id}/tracking
 ```
 
 The client selects a vehicle **class**. Only Operations can see and allocate a
@@ -111,7 +111,9 @@ flowchart TD
 ## Shared APIs
 
 - `/notifications` provides the in-app inbox; Expo tokens are registered at login.
-- `/communication/...` provides booking chat and the masked-call adapter.
-- `/documents` uploads private files used by messages, expenses, and incidents.
+- `GET /communication/conversations` provides server unread counts; message sends create Socket.IO, inbox and Expo notifications.
+- `/communication/...` provides secured booking chat. Masked calls return `503` until a telecom adapter is configured.
+- `/documents` uploads private DigitalOcean Spaces files used by messages, expenses, and incidents.
+- `/bookings/{id}/tracking` is shared by Client and assigned Agent flows and reports stale GPS samples.
 - `/bookings/{id}/change-requests` and `/cancellation-requests` submit requests
   for Operations approval.

@@ -1,8 +1,9 @@
 import Decimal from 'decimal.js';
 import { AppError } from '../common/errors.js';
 import { calculateQuote } from './pricing.js';
-import { syncAgencyCommissions } from './commission-service.js';
-import { hasAvailableVehicle } from './vehicle-availability.js';
+import { listAvailableVehicles } from './vehicle-availability.js';
+import { getVerifiedRouteKm } from './google-maps.js';
+import { billableUnits, LEGACY_SERVICE_TYPES } from './legacy-pricing-rules.js';
 
 const parseJson = (value, fallback = {}) => {
   if (!value) return fallback;
@@ -16,6 +17,21 @@ const asIso = (date, time) => {
   return new Date(`${datePart}T${String(time).slice(0, 8)}Z`).toISOString();
 };
 const round = (value) => new Decimal(value).toDecimalPlaces(2).toNumber();
+const reserveDates = async (connection, { reservationId, detailId, vehicleId, startAt, endAt }) => {
+  const day = new Date(`${sqlDate(startAt)}T00:00:00Z`);
+  const last = new Date(`${sqlDate(endAt)}T00:00:00Z`);
+  if ((last - day) / 86_400_000 > 365) {
+    throw new AppError(422, 'TRIP_TOO_LONG', 'Trips longer than one year need Operations pricing');
+  }
+  for (; day <= last; day.setUTCDate(day.getUTCDate() + 1)) {
+    await connection.execute(
+      `INSERT INTO vehicle_reserved_dates
+       (reservation_id,reservation_detail_id,vehicle_id,reserved_date,type,created_at,updated_at)
+       VALUES (?,?,?,?,1,NOW(),NOW())`,
+      [reservationId, detailId, vehicleId, day.toISOString().slice(0, 10)],
+    );
+  }
+};
 
 export const applyApprovedBookingChange = async (connection, { changeRequest, actorUserId }) => {
   const changes = parseJson(changeRequest.requested_changes);
@@ -71,6 +87,7 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
   }
 
   let requiresReassignment = false;
+  let pickupCollection = false;
   let afterTotal = 0;
   for (const row of rows) {
     const requested =
@@ -93,7 +110,18 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
     const startAt = requested.startAt ?? currentStart;
     const endAt = requested.endAt ?? currentEnd;
     const vehicleClassId = changes.vehicleClassId ?? row.vehicle_class_id;
-    const days = Math.max(Math.ceil((new Date(endAt) - new Date(startAt)) / 86_400_000) + 1, 1);
+    const [currentVehicles] = await connection.execute(
+      'SELECT vehicle_id FROM reservation_vehicles WHERE reservation_details_id=? AND status=1 AND deleted_at IS NULL LIMIT 1',
+      [row.id],
+    );
+    const days = billableUnits({
+      serviceCode: reservation.service_code,
+      startAt,
+      endAt,
+      requestedHours:
+        requested.requestedHours ??
+        (reservation.service_code === 'CHAUFFEUR' ? Number(row.days) : undefined),
+    });
     if (new Date(endAt) < new Date(startAt)) {
       throw new AppError(422, 'INVALID_BOOKING_DATES', 'Leg end must be after its start');
     }
@@ -104,25 +132,54 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
       Object.hasOwn(requested, 'dropoff') ||
       Number(vehicleClassId) !== Number(row.vehicle_class_id),
     );
-    if (
-      inventoryChanged &&
-      !(await hasAvailableVehicle({
+    let replacementVehicleId = null;
+    if (inventoryChanged) {
+      const criteria = {
         vehicleClassId,
         countryId: pickup.countryId,
         cityId: pickup.cityId,
         startAt,
         endAt,
+        serviceCode: reservation.service_code,
         connection,
         excludeReservationDetailId: row.id,
-      }))
-    ) {
-      throw new AppError(
-        409,
-        'VEHICLE_UNAVAILABLE',
-        `No available vehicle remains for booking leg ${row.id}`,
+      };
+      const [existing] = await connection.execute(
+        'SELECT vehicle_id FROM reservation_vehicles WHERE reservation_details_id=? AND status=1 AND deleted_at IS NULL FOR UPDATE',
+        [row.id],
       );
+      const candidates = await listAvailableVehicles(criteria);
+      const preferred = candidates.find(
+        (candidate) => Number(candidate.id) === Number(existing?.vehicle_id),
+      );
+      const candidate = preferred ?? candidates[0];
+      if (!candidate)
+        throw new AppError(
+          409,
+          'VEHICLE_UNAVAILABLE',
+          `No available vehicle remains for booking leg ${row.id}`,
+        );
+      await connection.execute('SELECT id FROM vehicles WHERE id=? FOR UPDATE', [candidate.id]);
+      if (
+        !(await listAvailableVehicles(criteria)).some(
+          (item) => Number(item.id) === Number(candidate.id),
+        )
+      ) {
+        throw new AppError(
+          409,
+          'VEHICLE_UNAVAILABLE',
+          'The replacement vehicle was just booked; retry approval',
+        );
+      }
+      replacementVehicleId = candidate.id;
     }
     if (inventoryChanged) requiresReassignment = true;
+    const distanceKm = await getVerifiedRouteKm({
+      pickup,
+      dropoff,
+      stops: requested.stops ?? [],
+      approximateDistanceKm: requested.approximateDistanceKm ?? row.approximate_distance,
+    });
 
     await connection.execute(
       `UPDATE reservation_details
@@ -134,7 +191,7 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
       [
         days,
         (requested.isHourly ?? Boolean(row.is_hourly)) ? 1 : 0,
-        requested.approximateDistanceKm ?? row.approximate_distance,
+        distanceKm ?? row.approximate_distance,
         pickup.address,
         dropoff?.address ?? null,
         sqlDate(startAt),
@@ -197,12 +254,30 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
       serviceCode: reservation.service_code,
       vehicleClassId,
       countryId: pickup.countryId,
-      durationDays: days,
+      startAt,
+      endAt,
+      requestedHours:
+        requested.requestedHours ??
+        (reservation.service_code === 'CHAUFFEUR' ? Number(row.days) : undefined),
+      distanceKm,
+      insuranceType: changes.insuranceType ?? draftDetails.insuranceType ?? 'NONE',
       pickupCityId: pickup.cityId,
       dropoffCityId: dropoff?.cityId,
       optionSelections,
+      vehicleId: replacementVehicleId ?? currentVehicles[0]?.vehicle_id,
+      pickup,
+      dropoff,
       connection,
     });
+    const currency = reservation.currency === 'CHF' ? 'CHF' : 'EUR';
+    if (quote.currency !== currency) {
+      throw new AppError(
+        422,
+        'CURRENCY_CHANGE_UNSUPPORTED',
+        'A booking change cannot move the reservation to another currency',
+      );
+    }
+    pickupCollection ||= quote.isPickupAndCollection;
     await connection.execute(
       'UPDATE reservation_costs SET status=0,updated_at=NOW() WHERE reservation_details_id=? AND status=1',
       [row.id],
@@ -213,19 +288,123 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
         (reservation_id,reservation_details_id,discount,base_rate,base_tax,optional_cost,
          one_way_drop_off_charge,car_with_driver_extra_cost,insurance_cost,net_cost,total_tax,
          total_amount,user_id,status,created_at,updated_at)
-       VALUES (?,?,0,?,?,?,0,0,0,?,?,?, ?,1,NOW(),NOW())`,
+       VALUES (?,?,0,?,?,?,?,?,?,?,?,?, ?,1,NOW(),NOW())`,
       [
         reservation.id,
         row.id,
         quote.lines.baseRate,
         quote.lines.totalTax,
         optionalCost,
-        quote.lines.baseRate + optionalCost,
+        quote.lines.oneWayCharge,
+        quote.lines.chauffeurExtraCost,
+        quote.lines.insuranceCost,
+        quote.lines.netCost,
         quote.lines.totalTax,
         quote.lines.total,
         actorUserId,
       ],
     );
+    await connection.execute(
+      'UPDATE reservation_taxes SET status=0,updated_at=NOW() WHERE reservation_details_id=? AND status=1',
+      [row.id],
+    );
+    await connection.execute(
+      `INSERT INTO reservation_taxes
+        (reservation_id,reservation_details_id,tax,status,created_at,updated_at)
+       VALUES (?,?,?,1,NOW(),NOW())`,
+      [reservation.id, row.id, quote.lines.taxes.reduce((sum, tax) => sum + tax.ratePercent, 0)],
+    );
+    await connection.execute(
+      'UPDATE reservation_optional_costs SET status=0,updated_at=NOW() WHERE reservation_details_id=? AND status=1',
+      [row.id],
+    );
+    for (const option of quote.lines.options) {
+      await connection.execute(
+        `INSERT INTO reservation_optional_costs
+          (reservation_id,rental_option_id,reservation_details_id,rental_option_text,rent_type,
+           rate_type,quantity,based_on,amount,total_amount,status,user_id,created_at,updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,1,?,NOW(),NOW())`,
+        [
+          reservation.id,
+          option.optionId,
+          row.id,
+          option.title,
+          LEGACY_SERVICE_TYPES[reservation.service_code],
+          option.rateType,
+          option.quantity,
+          option.basedOn,
+          option.unitAmount,
+          option.amount,
+          actorUserId,
+        ],
+      );
+    }
+    await connection.execute(
+      'UPDATE reservation_insurances SET status=0,updated_at=NOW() WHERE reservation_details_id=? AND status=1',
+      [row.id],
+    );
+    if (quote.insuranceType !== 'NONE') {
+      const [assigned] = await connection.execute(
+        'SELECT vehicle_id FROM reservation_vehicles WHERE reservation_details_id=? AND status=1 AND deleted_at IS NULL LIMIT 1',
+        [row.id],
+      );
+      await connection.execute(
+        `INSERT INTO reservation_insurances
+         (reservation_id,reservation_details_id,vehicle_id,vehicle_insurance_text,
+          vehicle_insurance_amount,vehicle_insurance_text_en,vehicle_insurance_text_de,
+          vehicle_insurance_text_fr,status,user_id,created_at,updated_at)
+         VALUES (?,?,?,?,?,?,?,?,1,?,NOW(),NOW())`,
+        [
+          reservation.id,
+          row.id,
+          replacementVehicleId ?? assigned?.vehicle_id,
+          quote.insuranceType,
+          quote.lines.insuranceCost,
+          quote.insuranceText?.en,
+          quote.insuranceText?.de,
+          quote.insuranceText?.fr,
+          actorUserId,
+        ],
+      );
+    }
+    if (inventoryChanged) {
+      await connection.execute(
+        'UPDATE reservation_vehicles SET status=2,deleted_at=NOW(),updated_at=NOW() WHERE reservation_details_id=? AND status=1',
+        [row.id],
+      );
+      await connection.execute('DELETE FROM vehicle_reserved_dates WHERE reservation_detail_id=?', [
+        row.id,
+      ]);
+      await connection.execute(
+        `INSERT INTO reservation_vehicles
+         (reservation_id,reservation_details_id,vehicle_id,pick_up_date,drop_off_date,
+          pick_up_time,drop_off_time,status,user_id,created_at,updated_at)
+         VALUES (?,?,?,?,?,?,?,1,?,NOW(),NOW())`,
+        [
+          reservation.id,
+          row.id,
+          replacementVehicleId,
+          sqlDate(startAt),
+          sqlDate(endAt),
+          sqlTime(startAt),
+          sqlTime(endAt),
+          actorUserId,
+        ],
+      );
+      await reserveDates(connection, {
+        reservationId: reservation.id,
+        detailId: row.id,
+        vehicleId: replacementVehicleId,
+        startAt,
+        endAt,
+      });
+      if (quote.insuranceType !== 'NONE') {
+        await connection.execute(
+          'UPDATE reservation_insurances SET vehicle_id=? WHERE reservation_details_id=? AND status=1',
+          [replacementVehicleId, row.id],
+        );
+      }
+    }
     afterTotal = round(new Decimal(afterTotal).plus(quote.lines.total));
   }
 
@@ -235,15 +414,11 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
         WHERE reservation_id=? AND status NOT IN ('COMPLETED','CANCELLED')`,
       [reservation.id],
     );
-    await connection.execute(
-      `UPDATE reservation_vehicles SET status=2,deleted_at=NOW(),updated_at=NOW()
-        WHERE reservation_id=? AND status=1`,
-      [reservation.id],
-    );
-    await connection.execute('DELETE FROM vehicle_reserved_dates WHERE reservation_id=?', [
-      reservation.id,
-    ]);
   }
+  await connection.execute('UPDATE reservations SET is_pick_up_and_collection=? WHERE id=?', [
+    pickupCollection ? 1 : 0,
+    reservation.id,
+  ]);
   if (draft) {
     await connection.execute(
       'UPDATE app_booking_drafts SET details=?,updated_at=NOW() WHERE id=?',
@@ -256,16 +431,18 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
             : {}),
           ...(Object.hasOwn(changes, 'notes') ? { notes: changes.notes } : {}),
           options: optionSelections,
+          insuranceType: changes.insuranceType ?? draftDetails.insuranceType ?? 'NONE',
         }),
         draft.id,
       ],
     );
   }
-  await syncAgencyCommissions(connection, reservation.id, actorUserId);
+  // Operations will reconcile agency_commissions after the approved change.
   return {
     reservationId: reservation.id,
     previousLifecycleStatus: changeRequest.previous_lifecycle_status,
     requiresReassignment,
+    currency: reservation.currency === 'CHF' ? 'CHF' : 'EUR',
     beforeTotal,
     afterTotal,
     difference: round(new Decimal(afterTotal).minus(beforeTotal)),

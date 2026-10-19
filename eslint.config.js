@@ -8,7 +8,13 @@ export default [
     languageOptions: {
       ecmaVersion: 2024,
       sourceType: 'module',
-      globals: { console: 'readonly', process: 'readonly', Buffer: 'readonly', fetch: 'readonly' },
+      globals: {
+        console: 'readonly',
+        process: 'readonly',
+        Buffer: 'readonly',
+        fetch: 'readonly',
+        AbortSignal: 'readonly',
+      },
     },
     rules: { 'no-unused-vars': ['error', { argsIgnorePattern: '^_' }] },
   },

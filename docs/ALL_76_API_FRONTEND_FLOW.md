@@ -1,4 +1,4 @@
-# Complete frontend flow for all 81 APIs
+# Complete frontend flow for all 86 APIs
 
 This is the implementation order for the Client/Agency Agent app, Chauffeur
 app, Operations/back-office integration, and backend-only Stripe processing.
@@ -167,7 +167,17 @@ creates a default. Availability uses the final user-selected country/city.
 |  80 | `GET /chauffeur/profile`   | Chauffeur Profile opens or refreshes.                                                                        | Populate Chauffeur identity, location, contact, address, and language fields.                      |
 |  81 | `PATCH /chauffeur/profile` | Chauffeur taps Save after editing supported profile fields.                                                  | Replace the local Chauffeur profile cache with the response.                                       |
 
-## N. End-to-end order by application
+## N. Production communication and shared booking APIs (APIs 82–86)
+
+|   # | API                                                       | Caller and exact call timing                                                                | Success → next action                                                                                                       |
+| --: | --------------------------------------------------------- | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+|  82 | `GET /bookings/{reservationId}/tracking`                  | Client or Agent opens/reconnects to live tracking for an accessible booking.                | Render all assignments and latest location; show “location delayed” when `locationIsStale=true`.                            |
+|  83 | `GET /bookings/{reservationId}/invoices`                  | Client/Agent opens Invoices for an accessible booking.                                      | Render invoice metadata when the verified legacy adapter is enabled; treat `INVOICE_ADAPTER_NOT_CONFIGURED` as unavailable. |
+|  84 | `GET /communication/conversations`                        | Messages inbox opens, pull-to-refreshs, or app reconnects.                                  | Render the booking conversation list and backend-calculated `unreadCount`.                                                  |
+|  85 | `POST /communication/conversations/{conversationId}/read` | Conversation becomes visible or the latest message is consumed.                             | Clear the local unread badge after the `204`; other joined sockets receive `conversation.read`.                             |
+|  86 | `POST /operations/invitations/{userId}/resend`            | Operations retries an inactive Agent/Chauffeur invitation after delivery failure or expiry. | Older unused links expire; deliver the new seven-day activation link and show `emailDelivery`.                              |
+
+## O. End-to-end order by application
 
 ### Client app
 
@@ -175,10 +185,10 @@ creates a default. Availability uses the final user-selected country/city.
 2. Home/profile: #28, #29/#30, #57–#59.
 3. Instant booking: #9 → #12 or #10/#11 → #13 → #14 → #15 → #17 → #18 → #19 → Stripe SDK → #53 → #21.
 4. Resume/list: #16, #20, #21.
-5. Live/completed: #31, #32.
+5. Live/completed: #82, #32. #31 remains a Client-only compatibility path backed by the same tracking service.
 6. Change/cancel: #22/#23, then wait for Operations #71/#72.
 7. VIP/Concierge: #24/#25 and history #26/#27.
-8. Communication/files: #49–#52 and #60/#61.
+8. Communication/files: #84 → #49/#50/#51/#85; files #60/#61; optional call #52.
 9. Exit: #4.
 
 ### Agency Agent area
@@ -186,7 +196,7 @@ creates a default. Availability uses the final user-selected country/city.
 1. Activation/login: #8 → #2/#77 → #5.
 2. Dashboard/profile/client: #33, #78/#79 → #34; create #35 or view #36/#37.
 3. Booking for selected client: #9–#19 with `customerId`, then #53 and #21.
-4. Commissions: #38. Change/cancel/manual requests/communication use the shared APIs.
+4. Commissions: #38. Shared live tracking uses #82 and messaging uses #84/#49–#51/#85.
 
 ### Chauffeur app
 
@@ -198,13 +208,13 @@ creates a default. Availability uses the final user-selected country/city.
 
 ### Operations
 
-1. Onboard accounts: #62/#63/#65.
+1. Onboard accounts: #62/#63, resend #86, then assign clients with #65.
 2. Booking queue: #66 → #67.
 3. Allocate resources: #69 → #70 and #64 → #68.
 4. Requests/reviews: #71–#76.
 5. Stripe asynchronously calls #56; Operations does not simulate #54 outside local development.
 
-## O. Frontend integration rules
+## P. Frontend integration rules
 
 - Use #3 from one centralized HTTP interceptor and retry only once.
 - Generate a stable unique `Idempotency-Key` for each #19 user confirmation.
@@ -216,3 +226,5 @@ creates a default. Availability uses the final user-selected country/city.
 - Use backend error `code` for application decisions and `message` for display.
 - Use push notifications to prompt refresh; always reload the authoritative
   resource API after a push.
+- On Socket.IO `session.ready`, rejoin visible conversations when `recovered=false`.
+- Chauffeur GPS should not send faster than the `minimumIntervalSeconds` returned by #44.

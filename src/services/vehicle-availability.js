@@ -1,4 +1,5 @@
 import { query } from '../db/pool.js';
+import { LEGACY_SERVICE_TYPES } from './legacy-pricing-rules.js';
 
 const sqlDateTime = (iso) => new Date(iso).toISOString().slice(0, 19).replace('T', ' ');
 
@@ -36,10 +37,12 @@ export const listAvailableVehicles = async ({
   endAt,
   connection,
   excludeReservationDetailId,
+  serviceCode,
 }) => {
   const start = sqlDateTime(startAt);
   const end = sqlDateTime(endAt);
   const location = vehicleLocationFilter({ alias: 'v', countryId, cityId });
+  const serviceType = serviceCode ? LEGACY_SERVICE_TYPES[serviceCode] : null;
   const run = connection
     ? async (sql, params) => connection.execute(sql, params).then(([rows]) => rows)
     : query;
@@ -49,6 +52,12 @@ export const listAvailableVehicles = async ({
        FROM vehicles v
       WHERE v.vehicle_class_id=? AND v.status=1 AND v.online_booking_status=1
         AND v.deleted_at IS NULL
+        ${
+          serviceType
+            ? `AND EXISTS (SELECT 1 FROM vehicle_service_types vst
+                          WHERE vst.vehicle_id=v.id AND vst.service_type=?)`
+            : ''
+        }
         ${location.sql}
         AND NOT EXISTS (
           SELECT 1 FROM vehicle_blocks vb
@@ -59,6 +68,7 @@ export const listAvailableVehicles = async ({
         AND NOT EXISTS (
           SELECT 1 FROM vehicle_reserved_dates vrd
            WHERE vrd.vehicle_id=v.id AND vrd.reserved_date BETWEEN DATE(?) AND DATE(?)
+             ${excludeReservationDetailId ? 'AND vrd.reservation_detail_id<>?' : ''}
         )
         AND NOT EXISTS (
           SELECT 1 FROM reservation_vehicles rv
@@ -70,11 +80,13 @@ export const listAvailableVehicles = async ({
       ORDER BY v.title,v.model,v.year DESC`,
     [
       vehicleClassId,
+      ...(serviceType ? [serviceType] : []),
       ...location.params,
       end,
       start,
       start,
       end,
+      ...(excludeReservationDetailId ? [excludeReservationDetailId] : []),
       ...(excludeReservationDetailId ? [excludeReservationDetailId] : []),
       end,
       start,
@@ -90,6 +102,7 @@ export const hasAvailableVehicle = async ({
   endAt,
   connection,
   excludeReservationDetailId,
+  serviceCode,
 }) =>
   (
     await listAvailableVehicles({
@@ -100,6 +113,7 @@ export const hasAvailableVehicle = async ({
       endAt,
       connection,
       excludeReservationDetailId,
+      serviceCode,
     })
   ).length > 0;
 
@@ -108,6 +122,8 @@ export const availableClassSql = ({ withDates, withCity }) => `
     SELECT 1 FROM vehicles av
      WHERE av.vehicle_class_id=vc.id AND av.status=1 AND av.online_booking_status=1
        AND av.deleted_at IS NULL
+       AND EXISTS (SELECT 1 FROM vehicle_service_types vst
+                    WHERE vst.vehicle_id=av.id AND vst.service_type=?)
        AND EXISTS (
          SELECT 1
            FROM vehicle_cities available_vehicle_city

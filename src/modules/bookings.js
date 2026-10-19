@@ -21,9 +21,27 @@ import {
 } from '../services/booking-service.js';
 import { loadBookingView } from '../services/booking-view.js';
 import { createPaymentIntent } from '../services/payment-provider.js';
+import { loadTrackingView } from '../services/tracking.js';
+import { listReservationInvoices } from '../services/invoice-provider.js';
 
 const router = Router();
 router.use(requireAuth, requireRoles(ROLES.CLIENT, ROLES.AGENCY_AGENT, ROLES.ADMIN, ROLES.STAFF));
+
+router.get(
+  '/:reservationId/tracking',
+  asyncHandler(async (request, response) => {
+    await getReservationForAccess(request.auth, request.params.reservationId);
+    response.json(await loadTrackingView(request.params.reservationId));
+  }),
+);
+
+router.get(
+  '/:reservationId/invoices',
+  asyncHandler(async (request, response) => {
+    await getReservationForAccess(request.auth, request.params.reservationId);
+    response.json({ items: await listReservationInvoices(request.params.reservationId) });
+  }),
+);
 
 const locationSchema = z.object({
   address: z.string().min(3).max(500),
@@ -33,6 +51,7 @@ const locationSchema = z.object({
   instructions: z.string().max(1000).optional(),
   latitude: z.number().min(-90).max(90).optional(),
   longitude: z.number().min(-180).max(180).optional(),
+  placeId: z.string().min(3).max(191).optional(),
   countryId: z.number().int().positive(),
   cityId: z.number().int().nonnegative().optional(),
   city: z.string().max(191).optional(),
@@ -45,10 +64,12 @@ const legSchema = z.object({
   stops: z.array(locationSchema).max(10).default([]),
   approximateDistanceKm: z.number().nonnegative().optional(),
   isHourly: z.boolean().default(false),
+  requestedHours: z.number().int().min(2).max(720).optional(),
   notes: z.string().max(1000).optional(),
 });
 const detailsSchema = z.object({
   vehicleClassId: z.number().int().positive(),
+  insuranceType: z.enum(['NONE', 'HALF', 'FULL']).default('NONE'),
   passenger: z.object({
     fullName: z.string().min(2).max(191),
     email: z.string().email().optional(),
@@ -84,12 +105,14 @@ const bookingChangeSchema = z
           stops: z.array(locationSchema).max(10).optional(),
           approximateDistanceKm: z.number().nonnegative().optional(),
           isHourly: z.boolean().optional(),
+          requestedHours: z.number().int().min(2).max(720).optional(),
           notes: z.string().max(1000).nullable().optional(),
         }),
       )
       .max(20)
       .optional(),
     options: detailsSchema.shape.options.optional(),
+    insuranceType: detailsSchema.shape.insuranceType.optional(),
     notes: z.string().max(2000).nullable().optional(),
   })
   .refine((value) => Object.keys(value).length > 0, 'At least one booking change is required');
@@ -160,8 +183,15 @@ router.post(
     const result = await query(
       `INSERT INTO app_quote_snapshots
       (draft_id, draft_revision, request_hash, currency, total_amount, quote_data, valid_until, created_at)
-     VALUES (?, ?, ?, 'EUR', ?, ?, DATE_ADD(NOW(), INTERVAL 30 MINUTE), NOW())`,
-      [draft.id, draft.revision, draftFingerprint(draft), quote.total, JSON.stringify(quote)],
+     VALUES (?, ?, ?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 30 MINUTE), NOW())`,
+      [
+        draft.id,
+        draft.revision,
+        draftFingerprint(draft),
+        quote.currency,
+        quote.total,
+        JSON.stringify(quote),
+      ],
     );
     await query(
       "UPDATE app_booking_drafts SET quote_snapshot_id = ?, status = 'QUOTED', updated_at = NOW() WHERE id = ?",
@@ -204,12 +234,13 @@ router.post(
       await connection.execute(
         `INSERT INTO app_payment_transactions
           (reservation_id, user_id, provider, amount, currency, status, idempotency_key, created_at, updated_at)
-         VALUES (?, ?, ?, ?, 'EUR', 'CREATED', ?, NOW(), NOW())`,
+         VALUES (?, ?, ?, ?, ?, 'CREATED', ?, NOW(), NOW())`,
         [
           booking.reservationId,
           request.auth.userId,
           env.PAYMENT_PROVIDER,
           quote.total,
+          quote.currency,
           request.get('Idempotency-Key') ?? null,
         ],
       );
@@ -218,14 +249,19 @@ router.post(
         "UPDATE app_booking_drafts SET status = 'CHECKED_OUT', reservation_id = ?, updated_at = NOW() WHERE id = ?",
         [booking.reservationId, draft.id],
       );
-      return { ...booking, paymentId: paymentRows[0].id, amount: quote.total };
+      return {
+        ...booking,
+        paymentId: paymentRows[0].id,
+        amount: quote.total,
+        currency: quote.currency,
+      };
     });
     let payment;
     try {
       payment = await createPaymentIntent({
         paymentId: created.paymentId,
         amount: created.amount,
-        currency: 'EUR',
+        currency: created.currency,
         reservationId: created.reservationId,
       });
     } catch (error) {

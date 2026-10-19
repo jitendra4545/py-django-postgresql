@@ -6,6 +6,8 @@ const bool = z
   .default('false')
   .transform((value) => value === 'true');
 
+const sqlIdentifier = z.string().regex(/^[A-Za-z0-9_]+$/, 'must be a simple SQL identifier');
+
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
@@ -20,11 +22,16 @@ const schema = z.object({
   DB_CONNECTION_LIMIT: z.coerce.number().int().positive().default(10),
   DB_SSL: bool,
   DB_SSL_CA_PATH: z.string().default(''),
+  DB_SSL_CA_BASE64: z.string().default(''),
   JWT_ACCESS_SECRET: z.string().min(32),
   JWT_REFRESH_SECRET: z.string().min(32),
   JWT_ACCESS_TTL: z.string().default('15m'),
   JWT_REFRESH_TTL_DAYS: z.coerce.number().int().positive().default(30),
   GOOGLE_CLIENT_IDS: z.string().default(''),
+  GOOGLE_PLACES_API_KEY: z.string().default(''),
+  GOOGLE_ROUTES_API_KEY: z.string().default(''),
+  GOOGLE_ROUTES_ENABLED: bool,
+  ALLOW_UNVERIFIED_DISTANCE: bool,
   EMAIL_PROVIDER: z.enum(['disabled', 'smtp']).default('disabled'),
   MAIL_HOST: z.string().default(''),
   MAIL_PORT: z.coerce.number().int().positive().default(587),
@@ -35,18 +42,35 @@ const schema = z.object({
   MAIL_FROM_NAME: z.string().default('Drive Luxury'),
   MAIL_REPLY_TO: z.union([z.literal(''), z.string().email()]).default(''),
   PASSWORD_RESET_URL: z.string().min(1).default('http://localhost:5173/reset-password'),
+  INVITATION_ACCEPT_URL: z.string().min(1).default('driveluxury://invitation'),
   PAYMENT_PROVIDER: z.enum(['mock', 'stripe']).default('mock'),
   STRIPE_SECRET_KEY: z.string().default(''),
   STRIPE_PUBLISHABLE_KEY: z.string().default(''),
   STRIPE_WEBHOOK_SECRET: z.string().default(''),
-  MASKED_CALL_PROVIDER: z.enum(['mock']).default('mock'),
-  UPLOAD_DRIVER: z.enum(['local', 's3']).default('local'),
+  MASKED_CALL_PROVIDER: z
+    .string()
+    .regex(/^[a-z0-9_-]+$/)
+    .default('disabled'),
+  MASKED_CALL_TTL_SECONDS: z.coerce.number().int().min(60).max(3600).default(600),
+  SUPPORT_PHONE: z.string().default(''),
+  GPS_MIN_INTERVAL_SECONDS: z.coerce.number().int().min(1).max(300).default(5),
+  GPS_STALE_AFTER_SECONDS: z.coerce.number().int().min(10).max(3600).default(45),
+  UPLOAD_DRIVER: z.enum(['local', 'spaces']).default('local'),
   UPLOAD_DIR: z.string().default('uploads'),
   MAX_UPLOAD_MB: z.coerce.number().positive().max(25).default(10),
-  AWS_REGION: z.string().default(''),
-  AWS_S3_BUCKET: z.string().default(''),
-  AWS_ACCESS_KEY_ID: z.string().default(''),
-  AWS_SECRET_ACCESS_KEY: z.string().default(''),
+  DO_SPACES_KEY: z.string().default(''),
+  DO_SPACES_SECRET: z.string().default(''),
+  DO_SPACES_REGION: z.string().default(''),
+  DO_SPACES_BUCKET: z.string().default(''),
+  DO_SPACES_ENDPOINT: z.string().default(''),
+  DO_SPACES_CDN_ENDPOINT: z.string().default(''),
+  DO_SPACES_PUBLIC_ROOT: z.string().default('images'),
+  DO_SPACES_PRIVATE_ROOT: z.string().default('private'),
+  MEDIA_CDN_ENABLED: bool,
+  INVOICE_ADAPTER: z.enum(['disabled', 'legacy']).default('disabled'),
+  LEGACY_INVOICE_TABLE: sqlIdentifier.default('reservation_invoices'),
+  LEGACY_INVOICE_RESERVATION_COLUMN: sqlIdentifier.default('reservation_id'),
+  LEGACY_PAID_PAYMENT_STATUS: z.coerce.number().int().nonnegative().default(20),
   REDIS_URL: z.string().default(''),
   EXPO_ACCESS_TOKEN: z.string().default(''),
   LOG_LEVEL: z.string().default('info'),
@@ -59,6 +83,19 @@ if (!parsed.success) {
 
 if (parsed.data.NODE_ENV === 'production' && parsed.data.PAYMENT_PROVIDER === 'mock') {
   throw new Error('PAYMENT_PROVIDER=mock is not allowed in production');
+}
+if (parsed.data.NODE_ENV === 'production' && parsed.data.ALLOW_UNVERIFIED_DISTANCE) {
+  throw new Error('ALLOW_UNVERIFIED_DISTANCE cannot be used in production');
+}
+if (
+  parsed.data.GOOGLE_ROUTES_ENABLED &&
+  !parsed.data.GOOGLE_ROUTES_API_KEY &&
+  !parsed.data.GOOGLE_PLACES_API_KEY
+) {
+  throw new Error('GOOGLE_ROUTES_ENABLED requires a Google Maps API key with Routes API enabled');
+}
+if (parsed.data.NODE_ENV === 'production' && parsed.data.MASKED_CALL_PROVIDER === 'mock') {
+  throw new Error('MASKED_CALL_PROVIDER=mock is not allowed in production');
 }
 if (parsed.data.NODE_ENV === 'production' && !parsed.data.GOOGLE_CLIENT_IDS.trim()) {
   throw new Error('GOOGLE_CLIENT_IDS is required in production');
@@ -83,8 +120,24 @@ if (
 ) {
   throw new Error('STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET are required for Stripe');
 }
-if (parsed.data.UPLOAD_DRIVER === 's3' && (!parsed.data.AWS_REGION || !parsed.data.AWS_S3_BUCKET)) {
-  throw new Error('AWS_REGION and AWS_S3_BUCKET are required for S3 uploads');
+if (
+  parsed.data.UPLOAD_DRIVER === 'spaces' &&
+  (!parsed.data.DO_SPACES_KEY ||
+    !parsed.data.DO_SPACES_SECRET ||
+    !parsed.data.DO_SPACES_REGION ||
+    !parsed.data.DO_SPACES_BUCKET ||
+    !parsed.data.DO_SPACES_ENDPOINT)
+) {
+  throw new Error(
+    'DO_SPACES_KEY, DO_SPACES_SECRET, DO_SPACES_REGION, DO_SPACES_BUCKET and DO_SPACES_ENDPOINT are required for DigitalOcean Spaces uploads',
+  );
+}
+if (
+  parsed.data.UPLOAD_DRIVER === 'spaces' &&
+  parsed.data.MEDIA_CDN_ENABLED &&
+  !parsed.data.DO_SPACES_CDN_ENDPOINT
+) {
+  throw new Error('DO_SPACES_CDN_ENDPOINT is required when MEDIA_CDN_ENABLED=true');
 }
 
 export const env = {

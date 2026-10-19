@@ -3,6 +3,10 @@ import { describe, expect, it } from 'vitest';
 
 const migration = fs.readFileSync('migrations/001_release_1_mobile_foundation.sql', 'utf8');
 const oauthMigration = fs.readFileSync('migrations/002_google_oauth_accounts.sql', 'utf8');
+const productionMigration = fs.readFileSync(
+  'migrations/003_digitalocean_storage_and_realtime.sql',
+  'utf8',
+);
 
 describe('Release 1 migration safety', () => {
   it('is additive and does not alter or drop a legacy table', () => {
@@ -34,5 +38,13 @@ describe('Release 1 migration safety', () => {
     expect(oauthMigration).toMatch(/FOREIGN KEY \(user_id\) REFERENCES users\(id\)/);
     expect(oauthMigration).not.toMatch(/\bALTER\s+TABLE\b/i);
     expect(oauthMigration).not.toMatch(/\bDROP\s+TABLE\b/i);
+  });
+
+  it('migrates private documents to DigitalOcean Spaces naming and adds invitation delivery state', () => {
+    expect(productionMigration).toMatch(/storage_disk ENUM\('local','spaces'\)/);
+    expect(productionMigration).toMatch(/visibility ENUM\('PRIVATE','PUBLIC'\)/);
+    expect(productionMigration).toMatch(/last_sent_at TIMESTAMP/);
+    expect(productionMigration).toMatch(/send_count INT UNSIGNED/);
+    expect(productionMigration).not.toMatch(/AWS_/);
   });
 });

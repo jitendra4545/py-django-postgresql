@@ -65,6 +65,20 @@ export const createRefund = async ({ paymentIntentId, paymentId, amount }) => {
   );
 };
 
+export const cancelAbandonedPayment = async (provider, providerReference) => {
+  if (provider === 'mock') return true;
+  if (provider !== 'stripe' || !providerReference) return false;
+  const intent = await stripe().paymentIntents.retrieve(providerReference);
+  if (intent.status === 'canceled') return true;
+  if (
+    !['requires_payment_method', 'requires_confirmation', 'requires_action'].includes(intent.status)
+  ) {
+    return false; // Never free inventory after a successful or processing payment.
+  }
+  await stripe().paymentIntents.cancel(providerReference);
+  return true;
+};
+
 export const constructWebhookEvent = (payload, signature) => {
   if (env.PAYMENT_PROVIDER === 'mock') return JSON.parse(payload.toString('utf8'));
   return stripe().webhooks.constructEvent(payload, signature, env.STRIPE_WEBHOOK_SECRET);

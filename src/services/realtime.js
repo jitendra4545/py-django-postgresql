@@ -23,8 +23,15 @@ export const registerSocketServer = (io) => {
   });
   io.on('connection', (socket) => {
     socket.join(`user:${socket.data.user.id}`);
+    socket.emit('session.ready', {
+      recovered: socket.recovered,
+      serverTime: new Date().toISOString(),
+    });
     socket.on('conversation.join', async (conversationId, acknowledge = () => {}) => {
       try {
+        if (!Number.isSafeInteger(Number(conversationId)) || Number(conversationId) <= 0) {
+          return acknowledge({ ok: false, error: 'invalid_conversation' });
+        }
         const participant = await one(
           `SELECT id FROM app_conversation_participants
             WHERE conversation_id = ? AND user_id = ? AND left_at IS NULL`,
@@ -38,6 +45,10 @@ export const registerSocketServer = (io) => {
       } catch {
         return acknowledge({ ok: false, error: 'internal_error' });
       }
+    });
+    socket.on('conversation.leave', async (conversationId, acknowledge = () => {}) => {
+      await socket.leave(`conversation:${conversationId}`);
+      return acknowledge({ ok: true });
     });
   });
 };

@@ -1,7 +1,11 @@
 import Decimal from 'decimal.js';
 
 const money = (value) => new Decimal(value ?? 0);
-const round = (value) => money(value).toDecimalPlaces(2).toNumber();
+const roundWhole = (value) => money(value).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber();
+const roundTax = (value, currency) =>
+  currency === 'CHF'
+    ? money(value).times(20).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).dividedBy(20).toNumber()
+    : money(value).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toNumber();
 
 export const computeQuoteBreakdown = ({
   serviceCode,
@@ -10,39 +14,61 @@ export const computeQuoteBreakdown = ({
   options,
   optionSelections,
   taxes,
+  currency = 'EUR',
+  rateIsTotal = false,
+  oneWayCharge = 0,
+  chauffeurExtraCost = 0,
+  insuranceCost = 0,
 }) => {
   const days = Math.max(Number(durationDays) || 1, 1);
-  const baseRate = money(rateAmount).times(serviceCode === 'TRANSFER' ? 1 : days);
+  const baseRate = money(
+    roundWhole(money(rateAmount).times(rateIsTotal || serviceCode === 'TRANSFER' ? 1 : days)),
+  );
   let taxableOptions = money(0);
   let nonTaxableOptions = money(0);
   const optionLines = options.map((option) => {
     const selection = optionSelections.find((item) => Number(item.optionId) === Number(option.id));
     const quantity = Math.max(Number(selection?.quantity) || 1, 1);
     const basisMultiplier = Number(option.based_on) === 1 ? days : 1;
-    const amount =
-      Number(option.rate_type) === 2
-        ? baseRate.times(option.amount).dividedBy(100).times(quantity)
-        : money(option.amount).times(quantity).times(basisMultiplier);
+    // The existing public PHP booking flow charges rental_options.amount as a
+    // configured amount, even when rate_type=2. Match that flow here.
+    const amount = money(roundWhole(money(option.amount).times(quantity).times(basisMultiplier)));
     if (Number(option.taxable) === 1) taxableOptions = taxableOptions.plus(amount);
     else nonTaxableOptions = nonTaxableOptions.plus(amount);
-    return { optionId: option.id, title: option.title, quantity, amount: round(amount) };
+    return {
+      optionId: option.id,
+      title: option.title,
+      quantity,
+      amount: amount.toNumber(),
+      basedOn: option.based_on,
+      rateType: option.rate_type,
+      unitAmount: option.amount,
+    };
   });
-  const taxableBase = baseRate.plus(taxableOptions);
+  const fees = money(roundWhole(oneWayCharge))
+    .plus(roundWhole(chauffeurExtraCost))
+    .plus(roundWhole(insuranceCost));
+  const taxableBase = baseRate.plus(taxableOptions).plus(fees);
   const taxLines = taxes.map((tax) => ({
     taxId: tax.id,
     title: tax.title,
     ratePercent: Number(tax.amount),
-    amount: round(taxableBase.times(tax.amount).dividedBy(100)),
+    amount: roundTax(taxableBase.times(tax.amount).dividedBy(100), currency),
   }));
   const totalTax = taxLines.reduce((sum, item) => sum.plus(item.amount), money(0));
-  const total = taxableBase.plus(nonTaxableOptions).plus(totalTax);
+  const net = taxableBase.plus(nonTaxableOptions);
+  const total = net.plus(totalTax);
   return {
-    baseRate: round(baseRate),
+    baseRate: baseRate.toNumber(),
     options: optionLines,
-    taxableOptions: round(taxableOptions),
-    nonTaxableOptions: round(nonTaxableOptions),
+    taxableOptions: taxableOptions.toNumber(),
+    nonTaxableOptions: nonTaxableOptions.toNumber(),
+    oneWayCharge: roundWhole(oneWayCharge),
+    chauffeurExtraCost: roundWhole(chauffeurExtraCost),
+    insuranceCost: roundWhole(insuranceCost),
+    netCost: net.toNumber(),
     taxes: taxLines,
-    totalTax: round(totalTax),
-    total: round(total),
+    totalTax: totalTax.toNumber(),
+    total: roundTax(total, currency),
   };
 };

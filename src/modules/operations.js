@@ -14,6 +14,7 @@ import { createPaymentIntent, createRefund } from '../services/payment-provider.
 import { hashPassword } from '../services/passwords.js';
 import { randomToken, tokenHash } from '../services/tokens.js';
 import { listAvailableVehicles } from '../services/vehicle-availability.js';
+import { emailDeliveryEnabled, sendInvitationEmail } from '../services/email.js';
 
 const router = Router();
 router.use(requireAuth, requireRoles(ROLES.ADMIN, ROLES.STAFF));
@@ -44,7 +45,31 @@ const createInvitedUser = async (connection, body, role) => {
     `INSERT INTO app_account_invitations (user_id,email,role,token_hash,expires_at,created_by_user_id,created_at) VALUES (?,?,?,?,DATE_ADD(NOW(),INTERVAL 7 DAY),?,NOW())`,
     [result.insertId, body.email, role, tokenHash(invitationToken), body.createdByUserId],
   );
-  return { userId: result.insertId, invitationToken };
+  return {
+    userId: result.insertId,
+    invitationToken,
+    email: body.email,
+    fullName: body.fullName,
+    role,
+  };
+};
+
+const roleLabel = (role) => (Number(role) === ROLES.AGENCY_AGENT ? 'AGENCY_AGENT' : 'CHAUFFEUR');
+
+const deliverInvitation = async (invitation) => {
+  if (!emailDeliveryEnabled()) return 'disabled';
+  await sendInvitationEmail({
+    to: invitation.email,
+    fullName: invitation.fullName,
+    token: invitation.invitationToken,
+    role: roleLabel(invitation.role),
+  });
+  await query(
+    `UPDATE app_account_invitations SET last_sent_at=NOW(),send_count=send_count+1
+      WHERE user_id=? AND accepted_at IS NULL ORDER BY id DESC LIMIT 1`,
+    [invitation.userId],
+  );
+  return 'sent';
 };
 
 router.post(
@@ -82,9 +107,11 @@ router.post(
       );
       return { ...account, agentId: agent.insertId };
     });
+    const emailDelivery = await deliverInvitation(created);
     response.status(201).json({
       userId: created.userId,
       agentId: created.agentId,
+      emailDelivery,
       invitationToken: env.NODE_ENV === 'production' ? undefined : created.invitationToken,
     });
   }),
@@ -120,10 +147,56 @@ router.post(
       );
       return { ...account, driverId: driver.insertId };
     });
+    const emailDelivery = await deliverInvitation(created);
     response.status(201).json({
       userId: created.userId,
       driverId: created.driverId,
+      emailDelivery,
       invitationToken: env.NODE_ENV === 'production' ? undefined : created.invitationToken,
+    });
+  }),
+);
+
+router.post(
+  '/invitations/:userId/resend',
+  asyncHandler(async (request, response) => {
+    const invitedUser = await one(
+      `SELECT id AS userId,email,full_name AS fullName,role,status
+         FROM users WHERE id=? AND role IN (?,?) AND deleted_at IS NULL`,
+      [request.params.userId, ROLES.AGENCY_AGENT, ROLES.CHAUFFEUR],
+    );
+    if (!invitedUser || Number(invitedUser.status) === 0) {
+      throw notFound('Pending Agent or Chauffeur invitation not found');
+    }
+    const invitationToken = randomToken();
+    await transaction(async (connection) => {
+      await connection.execute(
+        `UPDATE app_account_invitations SET expires_at=NOW()
+          WHERE user_id=? AND accepted_at IS NULL AND expires_at>NOW()`,
+        [invitedUser.userId],
+      );
+      await connection.execute(
+        `INSERT INTO app_account_invitations
+          (user_id,email,role,token_hash,expires_at,created_by_user_id,created_at)
+         VALUES (?,?,?,?,DATE_ADD(NOW(),INTERVAL 7 DAY),?,NOW())`,
+        [
+          invitedUser.userId,
+          invitedUser.email,
+          invitedUser.role,
+          tokenHash(invitationToken),
+          request.auth.userId,
+        ],
+      );
+    });
+    const emailDelivery = await deliverInvitation({
+      ...invitedUser,
+      invitationToken,
+    });
+    response.status(201).json({
+      userId: invitedUser.userId,
+      emailDelivery,
+      expiresInDays: 7,
+      invitationToken: env.NODE_ENV === 'production' ? undefined : invitationToken,
     });
   }),
 );
@@ -590,12 +663,13 @@ router.post(
         const [created] = await connection.execute(
           `INSERT INTO app_payment_transactions
             (reservation_id,user_id,provider,amount,currency,status,idempotency_key,created_at,updated_at)
-           VALUES (?,?,?,?,'EUR','CREATED',?,NOW(),NOW())`,
+           VALUES (?,?,?,?,?,'CREATED',?,NOW(),NOW())`,
           [
             item.reservation_id,
             item.requested_by_user_id,
             env.PAYMENT_PROVIDER,
             applied.difference,
+            applied.currency,
             `change-${item.id}`,
           ],
         );
@@ -603,6 +677,7 @@ router.post(
           type: 'PAYMENT',
           paymentId: created.insertId,
           amount: applied.difference,
+          currency: applied.currency,
         };
         lifecycleStatus = 'CHANGE_PAYMENT_PENDING';
       } else if (applied.difference < 0) {
@@ -661,7 +736,7 @@ router.post(
       const intent = await createPaymentIntent({
         paymentId: result.paymentAdjustment.paymentId,
         amount: result.paymentAdjustment.amount,
-        currency: 'EUR',
+        currency: result.paymentAdjustment.currency,
         reservationId: result.item.reservation_id,
       });
       await query(
@@ -777,6 +852,10 @@ router.post(
         await connection.execute(`DELETE FROM vehicle_reserved_dates WHERE reservation_id=?`, [
           item.reservation_id,
         ]);
+        await connection.execute(
+          'UPDATE reservation_vehicles SET status=2,deleted_at=NOW(),updated_at=NOW() WHERE reservation_id=? AND status=1',
+          [item.reservation_id],
+        );
       } else if (status === 'APPROVED_REFUND_PENDING') {
         for (const refund of refunds) {
           await connection.execute(
