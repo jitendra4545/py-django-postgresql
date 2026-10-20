@@ -36,4 +36,19 @@ describe('pricing arithmetic', () => {
     expect(result.totalTax).toBe(24);
     expect(result.total).toBe(269);
   });
+
+  it('rounds the base, each tax, and the payable amount to whole units', () => {
+    const result = computeQuoteBreakdown({
+      serviceCode: 'TRANSFER',
+      rateAmount: 101.4,
+      rateIsTotal: true,
+      durationDays: 1,
+      options: [],
+      optionSelections: [],
+      taxes: [{ id: 2, title: 'Tax', amount: 7.7 }],
+    });
+    expect(result.baseRate).toBe(101);
+    expect(result.taxes[0].amount).toBe(8);
+    expect(result.total).toBe(109);
+  });
 });

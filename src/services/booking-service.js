@@ -6,6 +6,7 @@ import { calculateQuote } from './pricing.js';
 import { listAvailableVehicles } from './vehicle-availability.js';
 import { getVerifiedRouteKm } from './google-maps.js';
 import { billableUnits, LEGACY_SERVICE_TYPES } from './legacy-pricing-rules.js';
+import { legacyReservationNumber } from './reservation-number.js';
 
 export const draftFingerprint = (draft) =>
   crypto
@@ -144,7 +145,10 @@ export const createLegacyReservation = async (connection, { draft, quote, auth }
       );
     }
   }
-  const reservationNo = `DL-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${bookingUuid.slice(0, 8).toUpperCase()}`;
+  // The PHP Reservation model assigns DL + zero-padded (3614 + reservation ID).
+  // Insert with a unique temporary value, then set the number once MySQL has
+  // allocated the ID; both statements are part of the checkout transaction.
+  const temporaryReservationNo = `DL-TMP-${bookingUuid}`;
   const agencyId = auth.agencyId ?? null;
   const [reservationResult] = await connection.execute(
     `INSERT INTO reservations
@@ -156,7 +160,7 @@ export const createLegacyReservation = async (connection, { draft, quote, auth }
        VALUES (?, ?, ?, ?, ?, 2, ?, 0, ?, ?, 0, 0, 0, 0, 0, 1, 0, 0, NOW(), NOW(), ?, 0)`,
     [
       bookingUuid,
-      reservationNo,
+      temporaryReservationNo,
       service.legacy_service_id,
       draft.customer_id,
       agencyId,
@@ -167,6 +171,22 @@ export const createLegacyReservation = async (connection, { draft, quote, auth }
     ],
   );
   const reservationId = reservationResult.insertId;
+  const reservationNo = legacyReservationNumber(reservationId);
+  const [conflicts] = await connection.execute(
+    'SELECT id FROM reservations WHERE reservation_no=? AND id<>? LIMIT 1',
+    [reservationNo, reservationId],
+  );
+  if (conflicts.length) {
+    throw new AppError(
+      409,
+      'RESERVATION_NUMBER_CONFLICT',
+      'A legacy reservation already uses this number',
+    );
+  }
+  await connection.execute('UPDATE reservations SET reservation_no=? WHERE id=?', [
+    reservationNo,
+    reservationId,
+  ]);
   await connection.execute(
     `INSERT INTO app_reservation_meta
       (reservation_id, service_code, source_channel, created_by_user_id, created_by_agent_id,

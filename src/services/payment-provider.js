@@ -1,13 +1,26 @@
 import Stripe from 'stripe';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 import { env } from '../config/env.js';
 import { stripePaymentStatus, toMinorUnits } from './payment-core.js';
+import { isStripeConnectivityError } from './stripe-network.js';
+export { isStripeConnectivityError } from './stripe-network.js';
 
 export { stripePaymentStatus, toMinorUnits } from './payment-core.js';
 
 let stripeClient;
 
 const stripe = () => {
-  if (!stripeClient) stripeClient = new Stripe(env.STRIPE_SECRET_KEY);
+  if (!stripeClient) {
+    // Reduce time spent waiting on an unavailable Stripe API. This does NOT
+    // fix DNS, firewall, proxy, or routing problems on the host machine.
+    stripeClient = new Stripe(env.STRIPE_SECRET_KEY, {
+      timeout: env.STRIPE_TIMEOUT_MS,
+      maxNetworkRetries: env.STRIPE_MAX_NETWORK_RETRIES,
+      ...(env.STRIPE_PROXY_URL
+        ? { httpAgent: new HttpsProxyAgent(env.STRIPE_PROXY_URL) }
+        : {}),
+    });
+  }
   return stripeClient;
 };
 
@@ -46,6 +59,21 @@ export const createPaymentIntent = async ({
     providerReference: intent.id,
     status: stripePaymentStatus(intent.status),
     clientSecret: intent.client_secret,
+    publishableKey: env.STRIPE_PUBLISHABLE_KEY,
+    raw: intent,
+  };
+};
+
+// Retrieve an existing intent instead of charging/creating a second one.
+// A paid intent is never confirmable again in the browser.
+export const retrievePaymentIntent = async (paymentIntentId) => {
+  const intent = await stripe().paymentIntents.retrieve(paymentIntentId);
+  return {
+    providerReference: intent.id,
+    status: stripePaymentStatus(intent.status),
+    stripeStatus: intent.status,
+    clientSecret: ['requires_payment_method', 'requires_confirmation', 'requires_action']
+      .includes(intent.status) ? intent.client_secret : null,
     publishableKey: env.STRIPE_PUBLISHABLE_KEY,
     raw: intent,
   };

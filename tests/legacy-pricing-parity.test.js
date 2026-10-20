@@ -66,7 +66,7 @@ describe('existing PHP pricing rules', () => {
       currency: 'CHF',
     });
     expect(quote.baseRate).toBe(101);
-    expect(quote.totalTax).toBe(7.8);
-    expect(quote.total).toBe(108.8);
+    expect(quote.totalTax).toBe(8);
+    expect(quote.total).toBe(109);
   });
 });

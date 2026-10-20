@@ -21,6 +21,7 @@ import {
 } from '../services/booking-service.js';
 import { loadBookingView } from '../services/booking-view.js';
 import { createPaymentIntent } from '../services/payment-provider.js';
+import { stripeServiceErrorCode } from '../services/stripe-network.js';
 import { loadTrackingView } from '../services/tracking.js';
 import { listReservationInvoices } from '../services/invoice-provider.js';
 
@@ -265,10 +266,22 @@ router.post(
         reservationId: created.reservationId,
       });
     } catch (error) {
-      payment = { status: 'FAILED', error: 'Payment provider is temporarily unavailable' };
+      const code = stripeServiceErrorCode(error);
+      console.error('PaymentIntent initialization failed; same payment may be recovered', {
+        paymentId: created.paymentId,
+        code,
+        errorType: error?.type ?? error?.name,
+      });
+      payment = {
+        status: 'FAILED',
+        error: code === 'STRIPE_UNREACHABLE'
+          ? 'Backend cannot reach Stripe. Restore connectivity and use payment retry for this payment ID.'
+          : 'Stripe payment setup failed; check server configuration and payment record.',
+        code,
+      };
       await query(
         `UPDATE app_payment_transactions SET status='FAILED',provider_payload=?,updated_at=NOW() WHERE id=?`,
-        [JSON.stringify({ message: error.message }), created.paymentId],
+        [JSON.stringify({ errorCode: code }), created.paymentId],
       );
     }
     if (payment.providerReference) {

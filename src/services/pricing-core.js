@@ -2,10 +2,6 @@ import Decimal from 'decimal.js';
 
 const money = (value) => new Decimal(value ?? 0);
 const roundWhole = (value) => money(value).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber();
-const roundTax = (value, currency) =>
-  currency === 'CHF'
-    ? money(value).times(20).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).dividedBy(20).toNumber()
-    : money(value).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toNumber();
 
 export const computeQuoteBreakdown = ({
   serviceCode,
@@ -14,7 +10,6 @@ export const computeQuoteBreakdown = ({
   options,
   optionSelections,
   taxes,
-  currency = 'EUR',
   rateIsTotal = false,
   oneWayCharge = 0,
   chauffeurExtraCost = 0,
@@ -53,7 +48,8 @@ export const computeQuoteBreakdown = ({
     taxId: tax.id,
     title: tax.title,
     ratePercent: Number(tax.amount),
-    amount: roundTax(taxableBase.times(tax.amount).dividedBy(100), currency),
+    // The reservation system stores whole currency units for every cost line.
+    amount: roundWhole(taxableBase.times(tax.amount).dividedBy(100)),
   }));
   const totalTax = taxLines.reduce((sum, item) => sum.plus(item.amount), money(0));
   const net = taxableBase.plus(nonTaxableOptions);
@@ -69,6 +65,6 @@ export const computeQuoteBreakdown = ({
     netCost: net.toNumber(),
     taxes: taxLines,
     totalTax: totalTax.toNumber(),
-    total: roundTax(total, currency),
+    total: roundWhole(total),
   };
 };

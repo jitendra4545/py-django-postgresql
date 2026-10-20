@@ -47,6 +47,10 @@ const schema = z.object({
   STRIPE_SECRET_KEY: z.string().default(''),
   STRIPE_PUBLISHABLE_KEY: z.string().default(''),
   STRIPE_WEBHOOK_SECRET: z.string().default(''),
+  // Proxy must be an approved HTTPS tunnel; never change Stripe's API host.
+  STRIPE_PROXY_URL: z.union([z.literal(''), z.string().url().refine((value) => ['http:', 'https:'].includes(new URL(value).protocol), 'Must use an http(s) proxy URL')]).default(''),
+  STRIPE_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(12000),
+  STRIPE_MAX_NETWORK_RETRIES: z.coerce.number().int().min(0).max(3).default(1),
   MASKED_CALL_PROVIDER: z
     .string()
     .regex(/^[a-z0-9_-]+$/)
@@ -114,11 +118,15 @@ if (
     'MAIL_HOST, MAIL_USERNAME, MAIL_PASSWORD and MAIL_FROM_ADDRESS are required for SMTP email',
   );
 }
-if (
-  parsed.data.PAYMENT_PROVIDER === 'stripe' &&
-  (!parsed.data.STRIPE_SECRET_KEY || !parsed.data.STRIPE_WEBHOOK_SECRET)
-) {
-  throw new Error('STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET are required for Stripe');
+if (parsed.data.PAYMENT_PROVIDER === 'stripe') {
+  const { STRIPE_SECRET_KEY: secret, STRIPE_PUBLISHABLE_KEY: publishable, STRIPE_WEBHOOK_SECRET: webhook } = parsed.data;
+  if (!/^sk_(test|live)_/.test(secret) || !/^pk_(test|live)_/.test(publishable) || !webhook.startsWith('whsec_') ||
+      secret.includes('replace_me') || publishable.includes('replace_me') || webhook.includes('replace_me')) {
+    throw new Error('PAYMENT_PROVIDER=stripe requires real Stripe secret (sk_), publishable (pk_), and webhook (whsec_) keys');
+  }
+  if (secret.startsWith('sk_test_') !== publishable.startsWith('pk_test_')) {
+    throw new Error('Stripe publishable and secret keys must both use test mode or both use live mode');
+  }
 }
 if (
   parsed.data.UPLOAD_DRIVER === 'spaces' &&

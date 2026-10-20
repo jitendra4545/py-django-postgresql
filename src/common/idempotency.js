@@ -35,7 +35,11 @@ export const idempotent = (scope) => async (request, response, next) => {
     if (Number(existing.response_status) === 0) {
       return next(conflict('A request with this idempotency key is already in progress'));
     }
-    return response.status(existing.response_status).json(JSON.parse(existing.response_body));
+    const stored = existing.response_body;
+    const body = Buffer.isBuffer(stored)
+      ? JSON.parse(stored.toString('utf8'))
+      : typeof stored === 'string' ? JSON.parse(stored) : stored;
+    return response.status(Number(existing.response_status)).json(body);
   }
 
   try {

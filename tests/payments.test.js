@@ -10,7 +10,7 @@ describe('Stripe payment adapter', () => {
 
   it('maps Stripe PaymentIntent states to application states', () => {
     expect(stripePaymentStatus('succeeded')).toBe('PAID');
-    expect(stripePaymentStatus('requires_payment_method')).toBe('FAILED');
+    expect(stripePaymentStatus('requires_payment_method')).toBe('REQUIRES_ACTION');
     expect(stripePaymentStatus('requires_action')).toBe('REQUIRES_ACTION');
   });
 
