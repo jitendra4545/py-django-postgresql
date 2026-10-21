@@ -220,16 +220,49 @@ export const calculateQuote = async ({
     dropoff &&
     Number(klass.one_way_drop_off_charge) > 0
   ) {
+    // const originalCities = await fetchAll(
+    //   'SELECT locality,country FROM vehicle_cities WHERE vehicle_id=? AND deleted_at IS NULL ORDER BY id',
+    //   [vehicleId],
+    // );
+    
     const originalCities = await fetchAll(
-      'SELECT locality,country FROM vehicle_cities WHERE vehicle_id=? AND deleted_at IS NULL ORDER BY id',
-      [vehicleId],
-    );
+  `SELECT
+       vc.city_id,
+       c.country_id,
+       vc.locality,
+       vc.country
+   FROM vehicle_cities vc
+   JOIN cities c ON c.id = vc.city_id
+   WHERE vc.vehicle_id = ?
+     AND vc.deleted_at IS NULL
+   ORDER BY vc.id`,
+  [vehicleId]
+);
+    // const matches = (point) =>
+    //   originalCities.some(
+    //     (row) =>
+    //       String(row.locality || '').toLowerCase() === String(point.city || '').toLowerCase() &&
+    //       String(row.country || '').toUpperCase() === String(country.code || '').toUpperCase(),
+    //   );
+    
+    
+    
     const matches = (point) =>
-      originalCities.some(
-        (row) =>
-          String(row.locality || '').toLowerCase() === String(point.city || '').toLowerCase() &&
-          String(row.country || '').toUpperCase() === String(country.code || '').toUpperCase(),
+  originalCities.some((row) => {
+    if (point?.cityId != null && point?.countryId != null) {
+      return (
+        Number(row.city_id) === Number(point.cityId) &&
+        Number(row.country_id) === Number(point.countryId)
       );
+    }
+
+    return (
+      String(row.locality || "").trim().toLowerCase() ===
+        String(point?.city || "").trim().toLowerCase() &&
+      String(row.country || "").trim().toUpperCase() ===
+        String(country.code || "").trim().toUpperCase()
+    );
+  });
     if (originalCities.length && !matches(pickup) && !matches(dropoff)) {
       isPickupAndCollection = true;
       const original = { address: `${originalCities[0].locality}, ${originalCities[0].country}` };
