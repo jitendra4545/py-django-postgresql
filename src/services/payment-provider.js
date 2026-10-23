@@ -2,7 +2,6 @@ import Stripe from 'stripe';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { env } from '../config/env.js';
 import { stripePaymentStatus, toMinorUnits } from './payment-core.js';
-import { isStripeConnectivityError } from './stripe-network.js';
 export { isStripeConnectivityError } from './stripe-network.js';
 
 export { stripePaymentStatus, toMinorUnits } from './payment-core.js';

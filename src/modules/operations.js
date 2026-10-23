@@ -9,7 +9,10 @@ import { env } from '../config/env.js';
 import { one, query, transaction } from '../db/pool.js';
 import { writeActivityLog } from '../services/activity-log.js';
 import { applyApprovedBookingChange } from '../services/booking-change-service.js';
-import { notifyBookingAudience, notifyUser } from '../services/notifications.js';
+import {
+  notifyBookingAudienceBestEffort as notifyBookingAudience,
+  notifyUserBestEffort as notifyUser,
+} from '../services/notifications.js';
 import { createPaymentIntent, createRefund } from '../services/payment-provider.js';
 import { hashPassword } from '../services/passwords.js';
 import { randomToken, tokenHash } from '../services/tokens.js';
@@ -434,15 +437,20 @@ router.post(
         assignmentId: result.assignmentId,
       },
     });
-    await notifyBookingAudience(request.params.reservationId, {
-      type: 'CHAUFFEUR_ASSIGNED',
-      title: 'Chauffeur assigned',
-      body: 'A chauffeur has been assigned to your service.',
-      data: {
-        reservationId: Number(request.params.reservationId),
-        assignmentId: result.assignmentId,
+    await notifyBookingAudience(
+      request.params.reservationId,
+      {
+        type: 'CHAUFFEUR_ASSIGNED',
+        title: 'Chauffeur assigned',
+        body: 'A chauffeur has been assigned to your service.',
+        data: {
+          reservationId: Number(request.params.reservationId),
+          assignmentId: result.assignmentId,
+        },
       },
-    });
+      null,
+      { excludeUserIds: [result.driverUserId] },
+    );
     response.status(201).json({ id: result.assignmentId, status: 'OFFERED' });
   }),
 );
@@ -920,6 +928,20 @@ router.patch(
       ],
     );
     if (!result.affectedRows) throw notFound('Expense not found');
+    const expenseOwner = await one(
+      `SELECT d.user_id AS userId FROM app_driver_expenses e
+         JOIN drivers d ON d.id=e.driver_id WHERE e.id=?`,
+      [request.params.expenseId],
+    );
+    if (expenseOwner?.userId) {
+      await notifyUser({
+        userId: expenseOwner.userId,
+        type: 'EXPENSE_REVIEW',
+        title: 'Expense status updated',
+        body: `Your expense is ${request.body.status.toLowerCase()}.`,
+        data: { expenseId: Number(request.params.expenseId), status: request.body.status },
+      }).catch((error) => console.error('Expense notification failed', { code: error.code }));
+    }
     response.json({ id: Number(request.params.expenseId), status: request.body.status });
   }),
 );
@@ -944,6 +966,23 @@ router.patch(
       ],
     );
     if (!result.affectedRows) throw notFound('Incident not found');
+    const incident = await one(
+      'SELECT reported_by_user_id AS userId,reservation_id AS reservationId FROM app_incidents WHERE id=?',
+      [request.params.incidentId],
+    );
+    if (incident) {
+      await notifyUser({
+        userId: incident.userId,
+        type: 'INCIDENT_REVIEW',
+        title: 'Service incident updated',
+        body: `Your incident report is ${request.body.status.toLowerCase().replaceAll('_', ' ')}.`,
+        data: {
+          incidentId: Number(request.params.incidentId),
+          reservationId: incident.reservationId,
+          status: request.body.status,
+        },
+      }).catch((error) => console.error('Incident notification failed', { code: error.code }));
+    }
     response.json({ id: Number(request.params.incidentId), status: request.body.status });
   }),
 );
@@ -962,6 +1001,26 @@ router.patch(
       [request.body.status, request.body.operationsNote ?? null, request.params.requestId],
     );
     if (!result.affectedRows) throw notFound('VIP request not found');
+    const vip = await one(
+      `SELECT r.created_by_user_id AS creatorId,c.user_id AS customerUserId
+         FROM app_vip_requests r JOIN customers c ON c.id=r.customer_id WHERE r.id=?`,
+      [request.params.requestId],
+    );
+    if (vip) {
+      for (const userId of new Set([vip.creatorId, vip.customerUserId].filter(Boolean))) {
+        await notifyUser({
+          userId,
+          type: 'AIRPORT_VIP_UPDATE',
+          title: 'Airport VIP request updated',
+          body: `Your Airport VIP request is ${request.body.status.toLowerCase().replaceAll('_', ' ')}.`,
+          data: {
+            requestId: Number(request.params.requestId),
+            requestType: 'AIRPORT_VIP',
+            status: request.body.status,
+          },
+        }).catch((error) => console.error('VIP notification failed', { code: error.code }));
+      }
+    }
     response.json({ id: Number(request.params.requestId), status: request.body.status });
   }),
 );
@@ -980,6 +1039,28 @@ router.patch(
       [request.body.status, request.body.operationsNote ?? null, request.params.requestId],
     );
     if (!result.affectedRows) throw notFound('Concierge request not found');
+    const concierge = await one(
+      `SELECT r.created_by_user_id AS creatorId,c.user_id AS customerUserId
+         FROM app_concierge_requests r JOIN customers c ON c.id=r.customer_id WHERE r.id=?`,
+      [request.params.requestId],
+    );
+    if (concierge) {
+      for (const userId of new Set(
+        [concierge.creatorId, concierge.customerUserId].filter(Boolean),
+      )) {
+        await notifyUser({
+          userId,
+          type: 'CONCIERGE_UPDATE',
+          title: 'Concierge request updated',
+          body: `Your Concierge request is ${request.body.status.toLowerCase().replaceAll('_', ' ')}.`,
+          data: {
+            requestId: Number(request.params.requestId),
+            requestType: 'CONCIERGE',
+            status: request.body.status,
+          },
+        }).catch((error) => console.error('Concierge notification failed', { code: error.code }));
+      }
+    }
     response.json({ id: Number(request.params.requestId), status: request.body.status });
   }),
 );

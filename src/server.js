@@ -5,6 +5,7 @@ import app from './app.js';
 import { env } from './config/env.js';
 import { registerSocketServer } from './services/realtime.js';
 import { sweepExpiredPaymentHolds } from './services/payment-holds.js';
+import { checkPushReceipts, processPushJobs } from './services/notification-worker.js';
 
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -27,8 +28,27 @@ const sweepTimer = setInterval(() => {
   );
 }, 60_000);
 
+// Work from the database-backed outbox so multiple API replicas may run safely.
+// Push receipts are checked separately after Expo has had time to deliver.
+const deliveryTimer = env.EXPO_PUSH_WORKER_ENABLED
+  ? setInterval(() => {
+      processPushJobs().catch((error) =>
+        console.error('Push delivery worker failed', { code: error.code }),
+      );
+    }, env.EXPO_PUSH_WORKER_INTERVAL_SECONDS * 1000)
+  : null;
+const receiptTimer = env.EXPO_PUSH_WORKER_ENABLED
+  ? setInterval(() => {
+      checkPushReceipts().catch((error) =>
+        console.error('Push receipt worker failed', { code: error.code }),
+      );
+    }, env.EXPO_PUSH_RECEIPT_INTERVAL_SECONDS * 1000)
+  : null;
+
 const shutdown = (signal) => {
   clearInterval(sweepTimer);
+  if (deliveryTimer) clearInterval(deliveryTimer);
+  if (receiptTimer) clearInterval(receiptTimer);
   console.log(`${signal} received; closing server`);
   server.close(() => process.exit(0));
 };

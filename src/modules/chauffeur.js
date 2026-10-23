@@ -8,7 +8,7 @@ import { assertAssignmentTransition } from '../common/state-machine.js';
 import { validate } from '../common/validate.js';
 import { ROLES, TERMINAL_ASSIGNMENT_STATUSES } from '../config/constants.js';
 import { one, query, transaction } from '../db/pool.js';
-import { notifyBookingAudience } from '../services/notifications.js';
+import { notifyBookingAudienceBestEffort as notifyBookingAudience } from '../services/notifications.js';
 import { updateProfileTable } from '../services/profile-updates.js';
 import { emitToUser } from '../services/realtime.js';
 import { env } from '../config/env.js';
@@ -213,7 +213,7 @@ router.post(
         true,
       );
       const changed = assertAssignmentTransition(assignment.status, request.body.status);
-      if (!changed) return assignment;
+      if (!changed) return { ...assignment, notificationChanged: false };
       const occurredAt = request.body.occurredAt?.slice(0, 19).replace('T', ' ') ?? null;
       await connection.execute(
         `UPDATE app_driver_assignments SET status=?,started_at=IF(?='ON_THE_WAY',COALESCE(started_at,NOW()),started_at),completed_at=IF(?='COMPLETED',NOW(),completed_at),updated_at=NOW() WHERE id=?`,
@@ -253,18 +253,25 @@ router.post(
         await connection.execute('UPDATE reservations SET status=2,updated_at=NOW() WHERE id=?', [
           assignment.reservation_id,
         ]);
-      return { ...assignment, status: request.body.status };
+      return { ...assignment, status: request.body.status, notificationChanged: true };
     });
-    await notifyBookingAudience(result.reservation_id, {
-      type: 'RIDE_STATUS',
-      title: 'Ride status updated',
-      body: `Your service is now ${result.status.toLowerCase().replaceAll('_', ' ')}`,
-      data: {
-        reservationId: result.reservation_id,
-        assignmentId: result.id,
-        status: result.status,
-      },
-    });
+    if (result.notificationChanged) {
+      await notifyBookingAudience(
+        result.reservation_id,
+        {
+          type: 'RIDE_STATUS',
+          title: 'Ride status updated',
+          body: `Your service is now ${result.status.toLowerCase().replaceAll('_', ' ')}`,
+          data: {
+            reservationId: result.reservation_id,
+            assignmentId: result.id,
+            status: result.status,
+          },
+        },
+        null,
+        { excludeUserIds: [request.auth.userId] },
+      );
+    }
     response.json({ id: result.id, status: result.status });
   }),
 );

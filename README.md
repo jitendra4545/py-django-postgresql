@@ -118,3 +118,14 @@ Browser password-reset page: `http://localhost:3000/reset-password?token=...`
 - `GOOGLE_PLACES_API_KEY` enables address autocomplete. Distance-based production quotes also require an authorized Routes API key and `GOOGLE_ROUTES_ENABLED=true`; no submitted kilometres are trusted in production.
 - Unpaid checkout holds expire after the quotation window; signed Stripe payment-success events confirm legacy `reservations.status=1` and `payment_status=20` automatically.
 - See [Legacy compatibility and staging checklist](docs/LEGACY_PARITY_STAGING.md) before pointing this release at the shared website database.
+
+## Expo notification delivery (Client, Agent and Chauffeur apps)
+
+- Existing notification inbox, booking/assignment/chat/Stripe alerts and Socket.IO events are preserved.
+- Mobile users may register or refresh tokens without re-login using `PUT /api/v1/notifications/devices`.
+- `GET /api/v1/notifications/unread-count` enables a native tab badge; `GET /notifications?unreadOnly=true` filters the inbox.
+- New notification jobs/tickets tables are added by `migrations/005_expo_notification_delivery.sql`. **Run `npm run migrate` on a backed-up staging clone before deploying this update.**
+- The worker retries enqueue/delivery failures, checks Expo receipts, and unregisters device tokens reported as `DeviceNotRegistered`.
+- `expo-server-sdk@7.2` requires Node 22.12 or newer. Configure the deployment runtime appropriately.
+- Expo React Native setup instructions, recipient/event matrix, rollout checks and a copyable TypeScript helper are in [docs/EXPO_NOTIFICATIONS_INTEGRATION.md](docs/EXPO_NOTIFICATIONS_INTEGRATION.md) and [examples/expo/driveLuxuryNotifications.ts](examples/expo/driveLuxuryNotifications.ts).
+- With no actual Expo frontend ZIP uploaded, the TypeScript example is **not yet integrated into the production React Native project**.

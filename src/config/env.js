@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { URL } from 'node:url';
 import { z } from 'zod';
 
 const bool = z
@@ -48,7 +49,18 @@ const schema = z.object({
   STRIPE_PUBLISHABLE_KEY: z.string().default(''),
   STRIPE_WEBHOOK_SECRET: z.string().default(''),
   // Proxy must be an approved HTTPS tunnel; never change Stripe's API host.
-  STRIPE_PROXY_URL: z.union([z.literal(''), z.string().url().refine((value) => ['http:', 'https:'].includes(new URL(value).protocol), 'Must use an http(s) proxy URL')]).default(''),
+  STRIPE_PROXY_URL: z
+    .union([
+      z.literal(''),
+      z
+        .string()
+        .url()
+        .refine(
+          (value) => ['http:', 'https:'].includes(new URL(value).protocol),
+          'Must use an http(s) proxy URL',
+        ),
+    ])
+    .default(''),
   STRIPE_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(12000),
   STRIPE_MAX_NETWORK_RETRIES: z.coerce.number().int().min(0).max(3).default(1),
   MASKED_CALL_PROVIDER: z
@@ -77,6 +89,10 @@ const schema = z.object({
   LEGACY_PAID_PAYMENT_STATUS: z.coerce.number().int().nonnegative().default(20),
   REDIS_URL: z.string().default(''),
   EXPO_ACCESS_TOKEN: z.string().default(''),
+  EXPO_NOTIFICATION_TEST_ENABLED: bool.default('false'),
+  EXPO_PUSH_WORKER_ENABLED: bool.default('true'),
+  EXPO_PUSH_WORKER_INTERVAL_SECONDS: z.coerce.number().int().min(5).max(300).default(10),
+  EXPO_PUSH_RECEIPT_INTERVAL_SECONDS: z.coerce.number().int().min(60).max(3600).default(300),
   LOG_LEVEL: z.string().default('info'),
 });
 
@@ -119,13 +135,27 @@ if (
   );
 }
 if (parsed.data.PAYMENT_PROVIDER === 'stripe') {
-  const { STRIPE_SECRET_KEY: secret, STRIPE_PUBLISHABLE_KEY: publishable, STRIPE_WEBHOOK_SECRET: webhook } = parsed.data;
-  if (!/^sk_(test|live)_/.test(secret) || !/^pk_(test|live)_/.test(publishable) || !webhook.startsWith('whsec_') ||
-      secret.includes('replace_me') || publishable.includes('replace_me') || webhook.includes('replace_me')) {
-    throw new Error('PAYMENT_PROVIDER=stripe requires real Stripe secret (sk_), publishable (pk_), and webhook (whsec_) keys');
+  const {
+    STRIPE_SECRET_KEY: secret,
+    STRIPE_PUBLISHABLE_KEY: publishable,
+    STRIPE_WEBHOOK_SECRET: webhook,
+  } = parsed.data;
+  if (
+    !/^sk_(test|live)_/.test(secret) ||
+    !/^pk_(test|live)_/.test(publishable) ||
+    !webhook.startsWith('whsec_') ||
+    secret.includes('replace_me') ||
+    publishable.includes('replace_me') ||
+    webhook.includes('replace_me')
+  ) {
+    throw new Error(
+      'PAYMENT_PROVIDER=stripe requires real Stripe secret (sk_), publishable (pk_), and webhook (whsec_) keys',
+    );
   }
   if (secret.startsWith('sk_test_') !== publishable.startsWith('pk_test_')) {
-    throw new Error('Stripe publishable and secret keys must both use test mode or both use live mode');
+    throw new Error(
+      'Stripe publishable and secret keys must both use test mode or both use live mode',
+    );
   }
 }
 if (

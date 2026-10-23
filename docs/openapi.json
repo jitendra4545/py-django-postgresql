@@ -20,6 +20,8 @@
     { "name": "Operations" }
   ],
   "paths": {
+    "/notifications/test": {"post":{"tags":["Notifications"],"summary":"QA ONLY: enqueue an Expo test push to your own registered device","description":"Opt-in with EXPO_NOTIFICATION_TEST_ENABLED=true. Requires authentication, never accepts an arbitrary recipient, limited to three test alerts per user per ten minutes. Disable in production after validation. Returns 202 when added to the delivery queue; not a delivery confirmation.","security":[{"bearerAuth":[]}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","additionalProperties":false,"properties":{"title":{"type":"string","minLength":1,"maxLength":80,"example":"Drive Luxury push test"},"body":{"type":"string","minLength":1,"maxLength":200,"example":"This confirms Expo push is wired up."}}}}}},"responses":{"202":{"description":"Test notification queued for this authenticated user","content":{"application/json":{"schema":{"type":"object","properties":{"notificationId":{"type":"integer"},"queued":{"type":"boolean"},"deliveryStatusPath":{"type":"string"}}}}}},"401":{"$ref":"#/components/responses/Error"},"404":{"$ref":"#/components/responses/Error"},"409":{"$ref":"#/components/responses/Error"},"429":{"$ref":"#/components/responses/Error"}}}},
+    "/notifications/test/{notificationId}/status": {"get":{"tags":["Notifications"],"summary":"QA ONLY: inspect own Expo test push delivery result","description":"Requires EXPO_NOTIFICATION_TEST_ENABLED=true and authenticated ownership. SENT means Expo accepted a push ticket, not that the device displayed the notification. Receipt counts describe downstream FCM/APNs acceptance.","security":[{"bearerAuth":[]}],"parameters":[{"name":"notificationId","in":"path","required":true,"schema":{"type":"integer","minimum":1}}],"responses":{"200":{"description":"Delivery job state and aggregated push receipt counts"},"404":{"$ref":"#/components/responses/Error"}}}},
     "/auth/client/register": {
       "post": { "tags": ["Authentication"], "summary": "Register a client account", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ClientRegistration" } } } }, "responses": { "201": { "$ref": "#/components/responses/AuthResponse" }, "409": { "$ref": "#/components/responses/Error" } } }
     },
@@ -211,8 +213,18 @@
     "/payments/webhook": {
       "post": { "tags": ["Payments"], "summary": "Receive a signed payment-provider event", "parameters": [{ "name": "x-webhook-signature", "in": "header", "required": true, "schema": { "type": "string" } }], "responses": { "200": { "description": "Received" }, "401": { "$ref": "#/components/responses/Error" } } }
     },
+    "/notifications/devices": {
+      "get": { "tags": ["Notifications"], "summary": "List your registered devices without exposing push tokens", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Device list" } } },
+      "put": { "tags": ["Notifications"], "summary": "Register or refresh your Expo push token after login", "security": [{ "bearerAuth": [] }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["deviceId", "platform", "pushToken"], "properties": { "deviceId": { "type": "string", "minLength": 4 }, "platform": { "enum": ["ANDROID", "IOS"] }, "pushToken": { "type": "string", "example": "ExponentPushToken[example]" }, "appVersion": { "type": "string" } } } } } }, "responses": { "200": { "description": "Token registered" }, "422": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/notifications/devices/{deviceId}": {
+      "delete": { "tags": ["Notifications"], "summary": "Remove your Expo device token (also use on logout)", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "deviceId", "in": "path", "required": true, "schema": { "type": "string" } }], "responses": { "204": { "description": "Device unregistered" } } }
+    },
+    "/notifications/unread-count": {
+      "get": { "tags": ["Notifications"], "summary": "Count unread in-app notifications", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Number of unread notifications" } } }
+    },
     "/notifications": {
-      "get": { "tags": ["Notifications"], "summary": "List current user's notifications", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PerPage" }], "responses": { "200": { "$ref": "#/components/responses/Paginated" } } }
+      "get": { "tags": ["Notifications"], "summary": "List current user's notifications, optionally unread only", "security": [{ "bearerAuth": [] }], "parameters": [{ "$ref": "#/components/parameters/Page" }, { "$ref": "#/components/parameters/PerPage" }, { "name": "unreadOnly", "in": "query", "schema": { "type": "string", "enum": ["true", "false"] } }], "responses": { "200": { "$ref": "#/components/responses/Paginated" } } }
     },
     "/notifications/{id}/read": {
       "post": { "tags": ["Notifications"], "summary": "Mark one notification read", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "204": { "description": "Marked read" } } }

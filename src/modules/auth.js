@@ -11,6 +11,7 @@ import { one, query, transaction } from '../db/pool.js';
 import { emailDeliveryEnabled, sendPasswordResetEmail } from '../services/email.js';
 import { verifyGoogleIdToken } from '../services/google-auth.js';
 import { hashPassword, verifyPassword } from '../services/passwords.js';
+import { assertExpoDeviceToken, registerPushDevice } from '../services/push-devices.js';
 import {
   randomToken,
   signAccessToken,
@@ -89,6 +90,7 @@ const assertAppProfileAvailable = async (user) => {
 };
 
 const issueSession = async (user, device = null) => {
+  if (device) assertExpoDeviceToken(device);
   const sessionId = uuid();
   const refreshToken = signRefreshToken(sessionId, user.id);
   await query(
@@ -103,22 +105,7 @@ const issueSession = async (user, device = null) => {
       env.JWT_REFRESH_TTL_DAYS,
     ],
   );
-  if (device) {
-    await query(
-      `INSERT INTO app_user_devices
-        (user_id, device_id, platform, push_token, app_version, last_seen_at, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, NOW(), NOW(), NOW())
-       ON DUPLICATE KEY UPDATE user_id=VALUES(user_id), platform=VALUES(platform),
-         push_token=VALUES(push_token), app_version=VALUES(app_version), last_seen_at=NOW(), updated_at=NOW()`,
-      [
-        user.id,
-        device.deviceId,
-        device.platform,
-        device.pushToken ?? null,
-        device.appVersion ?? null,
-      ],
-    );
-  }
+  if (device) await registerPushDevice(user.id, device, { allowTransfer: true });
   return { accessToken: signAccessToken(user), refreshToken, expiresIn: env.JWT_ACCESS_TTL };
 };
 
