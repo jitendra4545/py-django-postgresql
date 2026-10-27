@@ -23,7 +23,8 @@
     "seed:chauffeur-demo": "node scripts/seed-chauffeur-demo-bookings.js",
     "stripe:check": "node scripts/check-stripe-connection.js",
     "test:stripe-network": "node scripts/test-stripe-network.js",
-    "notifications:selftest": "node --experimental-test-module-mocks scripts/selftest-expo-notifications.mjs"
+    "notifications:selftest": "node --experimental-test-module-mocks scripts/selftest-expo-notifications.mjs",
+    "telnyx:check": "node scripts/check-telnyx-integration.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.891.0",

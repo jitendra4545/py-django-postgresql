@@ -23,6 +23,7 @@ import { loadBookingView } from '../services/booking-view.js';
 import { createPaymentIntent } from '../services/payment-provider.js';
 import { stripeServiceErrorCode } from '../services/stripe-network.js';
 import { loadTrackingView } from '../services/tracking.js';
+import { normalizeChauffeurDetails } from '../services/chauffeur-hours.js';
 import { listReservationInvoices } from '../services/invoice-provider.js';
 
 const router = Router();
@@ -170,7 +171,7 @@ router.put(
           SET details = ?, status = 'READY', revision = revision + 1,
               quote_snapshot_id = NULL, updated_at = NOW()
         WHERE id = ?`,
-      [JSON.stringify(request.body), draft.id],
+      [JSON.stringify(normalizeChauffeurDetails(draft.service_code, request.body)), draft.id],
     );
     response.json({ id: draft.id, status: 'READY' });
   }),

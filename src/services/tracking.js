@@ -31,7 +31,7 @@ export const loadTrackingView = async (reservationId) => {
   const assignments = await query(
     `SELECT ada.id,ada.reservation_details_id AS reservationDetailsId,ada.status,
             ada.scheduled_start_at AS scheduledStartAt,ada.scheduled_end_at AS scheduledEndAt,
-            d.full_name AS chauffeurName,d.photo AS chauffeurPhoto,d.phone AS chauffeurPhone
+            d.full_name AS chauffeurName,d.photo AS chauffeurPhoto
        FROM app_driver_assignments ada
        JOIN drivers d ON d.id=ada.driver_id
       WHERE ada.reservation_id=? AND ada.status NOT IN ('DECLINED','CANCELLED')

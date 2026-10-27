@@ -7,6 +7,7 @@ import { listAvailableVehicles } from './vehicle-availability.js';
 import { getVerifiedRouteKm } from './google-maps.js';
 import { billableUnits, LEGACY_SERVICE_TYPES } from './legacy-pricing-rules.js';
 import { legacyReservationNumber } from './reservation-number.js';
+import { effectiveLegEndAt } from './chauffeur-hours.js';
 
 export const draftFingerprint = (draft) =>
   crypto
@@ -34,7 +35,8 @@ export const buildDraftQuote = async (draft) => {
   const selected = [];
   for (const [index, leg] of details.legs.entries()) {
     const start = new Date(leg.startAt);
-    const requestedEnd = new Date(leg.endAt ?? leg.startAt);
+    const effectiveEnd = effectiveLegEndAt(draft.service_code, leg);
+    const requestedEnd = new Date(effectiveEnd ?? leg.startAt);
     const end = requestedEnd > start ? requestedEnd : new Date(start.getTime() + 60 * 60_000);
     const candidates = await listAvailableVehicles({
       vehicleClassId: details.vehicleClassId,
@@ -204,7 +206,9 @@ export const createLegacyReservation = async (connection, { draft, quote, auth }
   );
 
   for (const [index, leg] of details.legs.entries()) {
-    const endAt = leg.endAt ?? new Date(new Date(leg.startAt).getTime() + 3_600_000).toISOString();
+    const endAt =
+      effectiveLegEndAt(draft.service_code, leg) ??
+      new Date(new Date(leg.startAt).getTime() + 3_600_000).toISOString();
     const legQuote = quote.legs[index];
     const [detailResult] = await connection.execute(
       `INSERT INTO reservation_details

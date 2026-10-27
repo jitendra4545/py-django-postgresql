@@ -15,6 +15,7 @@ import clientRouter from './modules/client.js';
 import agentRouter from './modules/agency-agent.js';
 import chauffeurRouter from './modules/chauffeur.js';
 import communicationRouter from './modules/communication.js';
+import telnyxWebhookRouter from './modules/telnyx-webhook.js';
 import paymentRouter from './modules/payments.js';
 import operationsRouter from './modules/operations.js';
 import notificationRouter from './modules/notifications.js';
@@ -37,7 +38,12 @@ app.use(
   express.json({
     limit: '1mb',
     verify: (request, _response, buffer) => {
-      if (request.originalUrl.endsWith('/payments/webhook')) request.rawBody = buffer;
+      const routePath = request.originalUrl.split('?')[0];
+      if (
+        routePath.endsWith('/payments/webhook') ||
+        routePath.endsWith('/communication/telnyx/webhook')
+      )
+        request.rawBody = buffer;
     },
   }),
 );
@@ -71,6 +77,7 @@ app.use(`${env.API_PREFIX}/bookings`, bookingRouter);
 app.use(`${env.API_PREFIX}/client`, clientRouter);
 app.use(`${env.API_PREFIX}/agent`, agentRouter);
 app.use(`${env.API_PREFIX}/chauffeur`, chauffeurRouter);
+app.use(`${env.API_PREFIX}/communication/telnyx`, telnyxWebhookRouter);
 app.use(`${env.API_PREFIX}/communication`, communicationRouter);
 app.use(`${env.API_PREFIX}/payments`, paymentRouter);
 app.use(`${env.API_PREFIX}/operations`, operationsRouter);

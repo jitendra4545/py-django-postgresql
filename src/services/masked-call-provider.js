@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { AppError } from '../common/errors.js';
 import { ROLES } from '../config/constants.js';
 import { env } from '../config/env.js';
+import { createTelnyxBridge } from './telnyx-masked-calling.js';
 
 const providers = new Map();
 
@@ -37,6 +38,8 @@ registerMaskedCallProvider('mock', {
     };
   },
 });
+
+registerMaskedCallProvider('telnyx', { createBridge: createTelnyxBridge });
 
 export const createMaskedCallBridge = async (request) => {
   if (env.MASKED_CALL_PROVIDER === 'disabled') {

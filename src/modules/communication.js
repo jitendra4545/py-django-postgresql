@@ -3,7 +3,7 @@ import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import { asyncHandler } from '../common/async-handler.js';
 import { requireAuth } from '../common/auth.js';
-import { forbidden, notFound } from '../common/errors.js';
+import { AppError, forbidden, notFound } from '../common/errors.js';
 import { pageResponse, pagination } from '../common/pagination.js';
 import { validate } from '../common/validate.js';
 import { ROLES } from '../config/constants.js';
@@ -17,6 +17,12 @@ import { canAttachDocument } from '../services/chat-policy.js';
 
 const router = Router();
 router.use(requireAuth);
+const maskedCallLimiter = rateLimit({
+  windowMs: 10 * 60_000,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 const messageLimiter = rateLimit({
   windowMs: 60_000,
   limit: 60,
@@ -271,21 +277,37 @@ router.post(
 
 router.post(
   '/bookings/:reservationId/masked-call',
+  maskedCallLimiter,
   validate(z.object({ recipientRole: z.enum(['CLIENT', 'CHAUFFEUR', 'SUPPORT']) })),
   asyncHandler(async (request, response) => {
-    if (!canCallRecipientRole(request.auth.role, request.body.recipientRole)) {
+    const recipientRole = request.body.recipientRole;
+    if (!canCallRecipientRole(request.auth.role, recipientRole)) {
       throw forbidden('This recipient role cannot be called by the current user');
     }
     const reservation = await getReservationForAccess(request.auth, request.params.reservationId);
+    if (env.MASKED_CALL_PROVIDER === 'telnyx') {
+      const inactiveStatuses = new Set([
+        'PAYMENT_PENDING',
+        'CHANGE_PAYMENT_PENDING',
+        'REJECTED',
+        'CANCELLED',
+        'CANCELLATION_APPROVED',
+        'COMPLETED',
+      ]);
+      if (inactiveStatuses.has(reservation.lifecycle_status) || Number(reservation.status) === 3) {
+        throw new AppError(409, 'BOOKING_NOT_CALLABLE', 'Masked calls require an active booking');
+      }
+    }
+
     let recipient;
-    if (request.body.recipientRole === 'CLIENT') {
+    if (recipientRole === 'CLIENT') {
       recipient = await one('SELECT phone_no AS phone FROM customers WHERE id=?', [
         reservation.customer_id,
       ]);
-    } else if (request.body.recipientRole === 'CHAUFFEUR') {
+    } else if (recipientRole === 'CHAUFFEUR') {
       recipient = await one(
         `SELECT d.phone FROM app_driver_assignments ada JOIN drivers d ON d.id=ada.driver_id
-          WHERE ada.reservation_id=? AND ada.status NOT IN ('DECLINED','CANCELLED')
+          WHERE ada.reservation_id=? AND ada.status NOT IN ('DECLINED','CANCELLED','COMPLETED','NO_SHOW')
           ORDER BY ada.updated_at DESC LIMIT 1`,
         [reservation.id],
       );
@@ -293,31 +315,142 @@ router.post(
       recipient = { phone: env.SUPPORT_PHONE };
     }
     if (!recipient?.phone) throw notFound('No callable recipient is available for this booking');
+
+    // Keep the existing mocked provider path for development. The real Telnyx
+    // adapter must know the caller's registered number to route an inbound call.
+    let callerPhone;
+    if (env.MASKED_CALL_PROVIDER === 'telnyx') {
+      let caller;
+      if (request.auth.role === ROLES.CLIENT) {
+        caller = await one('SELECT phone_no AS phone FROM customers WHERE id=?', [
+          request.auth.customerId,
+        ]);
+      } else if (request.auth.role === ROLES.CHAUFFEUR) {
+        caller = await one('SELECT phone FROM drivers WHERE id=?', [request.auth.driverId]);
+      } else if (request.auth.role === ROLES.AGENCY_AGENT) {
+        caller = await one('SELECT phone FROM agents WHERE id=?', [request.auth.agentId]);
+      } else {
+        // Staff must dial from this configured company phone; a staff personal
+        // mobile number is not otherwise known to the legacy user schema.
+        caller = { phone: env.SUPPORT_PHONE };
+      }
+      if (!caller?.phone) {
+        throw new AppError(
+          422,
+          'CALLER_PHONE_REQUIRED',
+          'A registered caller phone number is required',
+        );
+      }
+      callerPhone = caller.phone;
+    }
+
     const bridge = await createMaskedCallBridge({
       reservationId: reservation.id,
       initiatorUserId: request.auth.userId,
-      recipientRole: request.body.recipientRole,
+      recipientRole,
       recipientPhone: recipient.phone,
+      callerPhone,
     });
-    const result = await query(
-      `INSERT INTO app_masked_calls
-        (reservation_id,initiator_user_id,recipient_role,provider,provider_reference,status,expires_at,created_at)
-       VALUES (?,?,?,?,?,?,DATE_ADD(NOW(),INTERVAL ? SECOND),NOW())`,
-      [
-        reservation.id,
-        request.auth.userId,
-        request.body.recipientRole,
-        bridge.provider,
-        bridge.providerReference,
-        bridge.status,
-        bridge.expiresInSeconds,
-      ],
-    );
-    response.status(201).json({
-      id: result.insertId,
-      status: bridge.status,
+
+    // Telnyx uses one shared inbound DID. Reuse an active route to prevent
+    // duplicate simultaneous booking routes from silently dialing the wrong
+    // recipient when the same authenticated caller phones that DID.
+    const saved =
+      bridge.provider === 'telnyx'
+        ? await transaction(async (connection) => {
+            // Serialize requests from the same user, including multiple devices.
+            await connection.execute('SELECT id FROM users WHERE id=? FOR UPDATE', [
+              request.auth.userId,
+            ]);
+            const [existing] = await connection.execute(
+              `SELECT c.id,c.reservation_id AS reservationId,c.recipient_role AS recipientRole,
+                    c.status,r.recipient_phone AS recipientPhone,
+                    GREATEST(TIMESTAMPDIFF(SECOND,NOW(),c.expires_at),0) AS remainingSeconds
+               FROM app_masked_calls c
+               JOIN app_telnyx_call_routes r ON r.masked_call_id=c.id
+              WHERE c.initiator_user_id=? AND r.caller_phone=? AND c.provider='telnyx'
+                AND c.status IN ('READY','RINGING','CONNECTING','CONNECTED')
+                AND c.expires_at>NOW()
+              ORDER BY c.created_at DESC,c.id DESC FOR UPDATE`,
+              [request.auth.userId, bridge.callerPhone],
+            );
+            if (existing.length) {
+              const item = existing[0];
+              const sameRoute =
+                existing.length === 1 &&
+                Number(item.reservationId) === Number(reservation.id) &&
+                item.recipientRole === recipientRole &&
+                item.recipientPhone === bridge.recipientPhone;
+              if (!sameRoute) {
+                throw new AppError(
+                  409,
+                  'MASKED_CALL_ALREADY_ACTIVE',
+                  'Finish or allow the previous masked call to expire before calling a different recipient',
+                );
+              }
+              return {
+                id: item.id,
+                status: item.status,
+                reused: true,
+                expiresInSeconds: Number(item.remainingSeconds),
+              };
+            }
+            const [created] = await connection.execute(
+              `INSERT INTO app_masked_calls
+              (reservation_id,initiator_user_id,recipient_role,provider,provider_reference,status,expires_at,created_at)
+             VALUES (?,?,?,?,?,?,DATE_ADD(NOW(),INTERVAL ? SECOND),NOW())`,
+              [
+                reservation.id,
+                request.auth.userId,
+                recipientRole,
+                bridge.provider,
+                bridge.providerReference,
+                bridge.status,
+                bridge.expiresInSeconds,
+              ],
+            );
+            await connection.execute(
+              `INSERT INTO app_telnyx_call_routes
+              (masked_call_id,caller_phone,recipient_phone,created_at)
+             VALUES (?,?,?,NOW())`,
+              [created.insertId, bridge.callerPhone, bridge.recipientPhone],
+            );
+            return {
+              id: created.insertId,
+              status: bridge.status,
+              reused: false,
+              expiresInSeconds: bridge.expiresInSeconds,
+            };
+          })
+        : await (async () => {
+            const created = await query(
+              `INSERT INTO app_masked_calls
+              (reservation_id,initiator_user_id,recipient_role,provider,provider_reference,status,expires_at,created_at)
+             VALUES (?,?,?,?,?,?,DATE_ADD(NOW(),INTERVAL ? SECOND),NOW())`,
+              [
+                reservation.id,
+                request.auth.userId,
+                recipientRole,
+                bridge.provider,
+                bridge.providerReference,
+                bridge.status,
+                bridge.expiresInSeconds,
+              ],
+            );
+            return {
+              id: created.insertId,
+              status: bridge.status,
+              reused: false,
+              expiresInSeconds: bridge.expiresInSeconds,
+            };
+          })();
+
+    response.status(saved.reused ? 200 : 201).json({
+      id: saved.id,
+      status: saved.status,
       dialNumber: bridge.dialNumber,
-      expiresInSeconds: bridge.expiresInSeconds,
+      expiresInSeconds: saved.expiresInSeconds,
+      reused: saved.reused,
     });
   }),
 );

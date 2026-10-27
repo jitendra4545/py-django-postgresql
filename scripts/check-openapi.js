@@ -8,6 +8,7 @@ const modules = {
   'src/modules/agency-agent.js': '/agent',
   'src/modules/chauffeur.js': '/chauffeur',
   'src/modules/communication.js': '/communication',
+  'src/modules/telnyx-webhook.js': '/communication/telnyx',
   'src/modules/payments.js': '/payments',
   'src/modules/operations.js': '/operations',
   'src/modules/notifications.js': '/notifications',

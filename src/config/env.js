@@ -68,6 +68,11 @@ const schema = z.object({
     .regex(/^[a-z0-9_-]+$/)
     .default('disabled'),
   MASKED_CALL_TTL_SECONDS: z.coerce.number().int().min(60).max(3600).default(600),
+  TELNYX_API_KEY: z.string().default(''),
+  TELNYX_CONNECTION_ID: z.string().default(''),
+  TELNYX_MASKED_NUMBER: z.string().default(''),
+  TELNYX_PUBLIC_KEY: z.string().default(''),
+  TELNYX_ALLOWED_DESTINATIONS: z.string().default(''),
   SUPPORT_PHONE: z.string().default(''),
   GPS_MIN_INTERVAL_SECONDS: z.coerce.number().int().min(1).max(300).default(5),
   GPS_STALE_AFTER_SECONDS: z.coerce.number().int().min(10).max(3600).default(45),
@@ -113,6 +118,18 @@ if (
   !parsed.data.GOOGLE_PLACES_API_KEY
 ) {
   throw new Error('GOOGLE_ROUTES_ENABLED requires a Google Maps API key with Routes API enabled');
+}
+if (parsed.data.MASKED_CALL_PROVIDER === 'telnyx') {
+  if (
+    !parsed.data.TELNYX_API_KEY ||
+    !parsed.data.TELNYX_CONNECTION_ID ||
+    !parsed.data.TELNYX_PUBLIC_KEY ||
+    !/^\+[1-9]\d{7,14}$/.test(parsed.data.TELNYX_MASKED_NUMBER)
+  ) {
+    throw new Error(
+      'Telnyx masked calling requires an API key, Voice API connection, owned E.164 phone number and webhook signing public key',
+    );
+  }
 }
 if (parsed.data.NODE_ENV === 'production' && parsed.data.MASKED_CALL_PROVIDER === 'mock') {
   throw new Error('MASKED_CALL_PROVIDER=mock is not allowed in production');
