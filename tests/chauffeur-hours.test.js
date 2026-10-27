@@ -14,6 +14,16 @@ describe('chauffeur selected-hour bookings', () => {
       endAt: '2026-11-05T14:00:00.000Z',
     });
   });
+  it('accepts five selected hours and derives a five-hour booking window', () => {
+    const normalized = normalizeChauffeurDetails('CHAUFFEUR', {
+      legs: [{ startAt, requestedHours: 5, isHourly: false }],
+    });
+    expect(normalized.legs[0]).toMatchObject({
+      requestedHours: 5,
+      isHourly: true,
+      endAt: '2026-11-05T15:00:00.000Z',
+    });
+  });
   it('extends a shorter supplied period to cover paid hours', () => {
     expect(effectiveLegEndAt('CHAUFFEUR', {
       startAt, endAt: '2026-11-05T11:00:00.000Z', requestedHours: 4,

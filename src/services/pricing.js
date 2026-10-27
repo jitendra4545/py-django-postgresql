@@ -306,6 +306,9 @@ export const calculateQuote = async ({
     vehicleClassId,
     durationDays: units,
     billableUnits: units,
+    // Chauffeur billable units are hours; expose this explicitly so Expo
+    // clients never mistake durationDays for days or use Google's route ETA.
+    ...(serviceCode === 'CHAUFFEUR' ? { billableHours: units } : {}),
     rentalSeasonId: seasonId,
     durationBandId: durationBand?.id ?? null,
     distanceKm: km,

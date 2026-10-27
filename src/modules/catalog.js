@@ -6,7 +6,7 @@ import { validate } from '../common/validate.js';
 import { query } from '../db/pool.js';
 import { availabilityDateParams, availableClassSql } from '../services/vehicle-availability.js';
 import { LEGACY_SERVICE_TYPES } from '../services/legacy-pricing-rules.js';
-import { autocompletePlace, getPlaceDetails } from '../services/google-maps.js';
+import { autocompletePlace, getPlaceDetails, getRoutePreview } from '../services/google-maps.js';
 
 const router = Router();
 const rentTypeByService = LEGACY_SERVICE_TYPES;
@@ -17,6 +17,25 @@ const placesLimiter = rateLimit({
   legacyHeaders: false,
 });
 const sessionToken = z.string().uuid().optional();
+
+// A location selected through Places can be sent by Place ID, or by coordinates
+// when the frontend already has them. Do not accept arbitrary addresses here.
+const routePreviewPoint = z
+  .object({
+    placeId: z.string().trim().regex(/^[A-Za-z0-9_:-]{3,191}$/).optional(),
+    latitude: z.number().finite().min(-90).max(90).optional(),
+    longitude: z.number().finite().min(-180).max(180).optional(),
+  })
+  .refine(
+    (point) => Boolean(point.placeId) || (point.latitude !== undefined && point.longitude !== undefined),
+    'Provide a Google placeId or both latitude and longitude',
+  );
+const routePreviewLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 router.get(
   '/services',
@@ -209,6 +228,17 @@ router.get(
       city,
       supported: Boolean(country && city),
     });
+  }),
+);
+
+router.post(
+  '/route-preview',
+  routePreviewLimiter,
+  validate(z.object({ pickup: routePreviewPoint, dropoff: routePreviewPoint }), 'body'),
+  asyncHandler(async (request, response) => {
+    const result = await getRoutePreview(request.body);
+    response.set('Cache-Control', 'no-store');
+    response.json(result);
   }),
 );
 

@@ -99,3 +99,60 @@ export const getVerifiedRouteKm = async (leg) => {
   }
   return Math.round(distance) / 1000;
 };
+
+
+// Pre-booking UX only. Pricing/availability must still be calculated through
+// POST /bookings/drafts/:draftId/quote using the verified pricing rules.
+export const getRoutePreview = async ({ pickup, dropoff }) => {
+  if (!env.GOOGLE_ROUTES_ENABLED) {
+    throw new AppError(
+      503,
+      'GOOGLE_ROUTES_NOT_CONFIGURED',
+      'Route preview is unavailable until Google Routes is enabled',
+    );
+  }
+
+  const payload = await callGoogle('https://routes.googleapis.com/directions/v2:computeRoutes', {
+    key: env.GOOGLE_ROUTES_API_KEY || env.GOOGLE_PLACES_API_KEY,
+    method: 'POST',
+    body: {
+      origin: waypoint(pickup),
+      destination: waypoint(dropoff),
+      travelMode: 'DRIVE',
+      routingPreference: 'TRAFFIC_UNAWARE',
+    },
+    fieldMask: 'routes.distanceMeters,routes.duration',
+  });
+  const route = payload.routes?.[0];
+  if (!route) {
+    throw new AppError(422, 'ROUTE_UNAVAILABLE', 'No drivable route was found');
+  }
+
+  const distanceMeters = route.distanceMeters;
+  const duration = route.duration;
+  if (
+    !Number.isFinite(distanceMeters) ||
+    distanceMeters < 0 ||
+    typeof duration !== 'string' ||
+    !/^\d+(?:\.\d+)?s$/.test(duration)
+  ) {
+    throw new AppError(503, 'GOOGLE_MAPS_UNAVAILABLE', 'Route provider returned incomplete data');
+  }
+  const durationSeconds = Number(duration.slice(0, -1));
+  if (!Number.isFinite(durationSeconds)) {
+    throw new AppError(503, 'GOOGLE_MAPS_UNAVAILABLE', 'Route provider returned incomplete data');
+  }
+  const durationMinutes = Math.ceil(durationSeconds / 60);
+  const hours = Math.floor(durationMinutes / 60);
+  const minutes = durationMinutes % 60;
+  const durationText = [
+    ...(hours ? [`${hours} hr${hours === 1 ? '' : 's'}`] : []),
+    ...(!hours || minutes ? [`${minutes} min`] : []),
+  ].join(' ');
+
+  return {
+    distanceKm: Math.round(distanceMeters) / 1000,
+    durationMinutes,
+    durationText,
+  };
+};

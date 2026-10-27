@@ -18,3 +18,5 @@ Example leg (inside the complete booking-details body):
 Use **actual** country/city IDs and validated Google Places addresses from catalog APIs. The quote API `POST /api/v1/bookings/drafts/{draftId}/quote` then calculates seasonal hourly rate and verified-route extra-km charges. The price is not calculated by the frontend. If the supplied `endAt` is earlier than the selected package end, it is normalized to the full booked window; if later, the API rejects with `INVALID_CHAUFFEUR_HOURS` to avoid booking less time than requested. Availability and final reservation use the same effective end time. There is no new SQL migration.
 
 The existing non-hourly chauffeur flow remains supported if `requestedHours` is omitted (supply `endAt`). Dates/times must be ISO 8601. Auth is still required.
+
+For an explicit **five-hour price quote** example and the returned `billableHours`, see [CHAUFFEUR_FIVE_HOUR_QUOTE.md](CHAUFFEUR_FIVE_HOUR_QUOTE.md).

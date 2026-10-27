@@ -77,7 +77,14 @@ export const buildDraftQuote = async (draft) => {
       pickup: leg.pickup,
       dropoff: leg.dropoff,
     });
-    legQuotes.push({ sequenceNo: index + 1, vehicleId: vehicle.id, ...quote });
+    legQuotes.push({
+      sequenceNo: index + 1,
+      vehicleId: vehicle.id,
+      // Report the same effective window used for availability and pricing.
+      startAt: start.toISOString(),
+      endAt: end.toISOString(),
+      ...quote,
+    });
     selected.push({ vehicleId: vehicle.id, start, end });
   }
   if (new Set(legQuotes.map((leg) => leg.currency)).size > 1) {
