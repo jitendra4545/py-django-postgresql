@@ -129,3 +129,22 @@ Browser password-reset page: `http://localhost:3000/reset-password?token=...`
 - `expo-server-sdk@7.2` requires Node 22.12 or newer. Configure the deployment runtime appropriately.
 - Expo React Native setup instructions, recipient/event matrix, rollout checks and a copyable TypeScript helper are in [docs/EXPO_NOTIFICATIONS_INTEGRATION.md](docs/EXPO_NOTIFICATIONS_INTEGRATION.md) and [examples/expo/driveLuxuryNotifications.ts](examples/expo/driveLuxuryNotifications.ts).
 - With no actual Expo frontend ZIP uploaded, the TypeScript example is **not yet integrated into the production React Native project**.
+
+## Optional database-backed API request/response logs
+
+The current console access logs (Morgan) are unchanged. To also save redacted API
+request/response diagnostics (HTTP method, path, status, duration, safe JSON bodies,
+query parameters, authenticated user ID, and client IP) to MySQL, run:
+
+```bash
+npm run audit:setup
+# set API_AUDIT_LOG_ENABLED=true in the backend environment
+npm start
+```
+
+The new table is `app_api_request_logs`, created by additive migration
+`migrations/007_api_request_audit_logs.sql`. `npm run audit:setup` installs **only**
+this table; it does not rerun older migrations or bypass historical checksums.
+
+See [API_DATABASE_REQUEST_LOGGING.md](docs/API_DATABASE_REQUEST_LOGGING.md) for
+sample MySQL queries, privacy redaction, retention, queue behavior and testing.

@@ -21,6 +21,8 @@ import operationsRouter from './modules/operations.js';
 import notificationRouter from './modules/notifications.js';
 import documentRouter from './modules/documents.js';
 import { errorHandler, notFoundHandler } from './middleware/error-handler.js';
+import { createApiAuditMiddleware } from './middleware/api-audit.js';
+import { enqueueApiAuditLog } from './services/api-audit-log.js';
 
 const openapi = JSON.parse(readFileSync(new URL('../docs/openapi.json', import.meta.url), 'utf8'));
 const publicDirectory = fileURLToPath(new URL('../public', import.meta.url));
@@ -31,6 +33,17 @@ const app = express();
 // Express and express-rate-limit use the real client IP from X-Forwarded-For.
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
+// Register before body parsers and routers: captures 401/422/429/500/304 without
+// affecting request bodies, Stripe/Telnyx raw signatures, or normal responses.
+if (env.API_AUDIT_LOG_ENABLED) {
+  app.use(
+    createApiAuditMiddleware({
+      enqueue: enqueueApiAuditLog,
+      apiPrefix: env.API_PREFIX,
+      maxPayloadBytes: env.API_AUDIT_LOG_MAX_BODY_BYTES,
+    }),
+  );
+}
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'same-site' } }));
 app.use(cors({ origin: env.corsOrigins, credentials: true }));
 app.use(compression());

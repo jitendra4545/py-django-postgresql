@@ -6,6 +6,7 @@ import { env } from './config/env.js';
 import { registerSocketServer } from './services/realtime.js';
 import { sweepExpiredPaymentHolds } from './services/payment-holds.js';
 import { checkPushReceipts, processPushJobs } from './services/notification-worker.js';
+import { startApiAuditLogWriter, stopApiAuditLogWriter } from './services/api-audit-log.js';
 
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -15,6 +16,7 @@ const io = new Server(server, {
   pingTimeout: 20_000,
 });
 registerSocketServer(io);
+startApiAuditLogWriter();
 
 server.listen(env.PORT, '0.0.0.0', () => {
   console.log(`Drive Luxury API listening on port ${env.PORT}`);
@@ -50,7 +52,14 @@ const shutdown = (signal) => {
   if (deliveryTimer) clearInterval(deliveryTimer);
   if (receiptTimer) clearInterval(receiptTimer);
   console.log(`${signal} received; closing server`);
-  server.close(() => process.exit(0));
+  server.close(async () => {
+    try {
+      await stopApiAuditLogWriter();
+    } catch (error) {
+      console.warn('API audit shutdown flush failed', { code: error?.code });
+    }
+    process.exit(0);
+  });
 };
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));

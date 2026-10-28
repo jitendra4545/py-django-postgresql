@@ -98,6 +98,13 @@ const schema = z.object({
   EXPO_PUSH_WORKER_ENABLED: bool.default('true'),
   EXPO_PUSH_WORKER_INTERVAL_SECONDS: z.coerce.number().int().min(5).max(300).default(10),
   EXPO_PUSH_RECEIPT_INTERVAL_SECONDS: z.coerce.number().int().min(60).max(3600).default(300),
+  // Database-backed, privacy-redacted HTTP audit logs. Enable only after migration 007.
+  API_AUDIT_LOG_ENABLED: bool.default('false'),
+  API_AUDIT_LOG_MAX_BODY_BYTES: z.coerce.number().int().min(512).max(65536).default(8192),
+  API_AUDIT_LOG_MAX_QUEUE: z.coerce.number().int().min(100).max(20000).default(2000),
+  API_AUDIT_LOG_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(50),
+  API_AUDIT_LOG_FLUSH_MS: z.coerce.number().int().min(250).max(60000).default(1000),
+  API_AUDIT_LOG_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(14),
   LOG_LEVEL: z.string().default('info'),
 });
 
