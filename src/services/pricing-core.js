@@ -2,6 +2,19 @@ import Decimal from 'decimal.js';
 
 const money = (value) => new Decimal(value ?? 0);
 const roundWhole = (value) => money(value).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber();
+const roundTwo = (value) => money(value).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toNumber();
+
+// The client website displays Swiss tax at the nearest CHF 0.05 (e.g.
+// 412 * 8.1% = 33.372 -> 33.35), but shows checkout totals in whole CHF.
+const taxLineAmount = (value, currency) =>
+  currency === 'CHF'
+    ? money(value)
+        .dividedBy('0.05')
+        .toDecimalPlaces(0, Decimal.ROUND_HALF_UP)
+        .times('0.05')
+        .toDecimalPlaces(2)
+        .toNumber()
+    : roundWhole(value);
 
 export const computeQuoteBreakdown = ({
   serviceCode,
@@ -10,6 +23,7 @@ export const computeQuoteBreakdown = ({
   options,
   optionSelections,
   taxes,
+  currency = 'EUR',
   rateIsTotal = false,
   oneWayCharge = 0,
   chauffeurExtraCost = 0,
@@ -48,8 +62,7 @@ export const computeQuoteBreakdown = ({
     taxId: tax.id,
     title: tax.title,
     ratePercent: Number(tax.amount),
-    // The reservation system stores whole currency units for every cost line.
-    amount: roundWhole(taxableBase.times(tax.amount).dividedBy(100)),
+    amount: taxLineAmount(taxableBase.times(tax.amount).dividedBy(100), currency),
   }));
   const totalTax = taxLines.reduce((sum, item) => sum.plus(item.amount), money(0));
   const net = taxableBase.plus(nonTaxableOptions);
@@ -64,7 +77,10 @@ export const computeQuoteBreakdown = ({
     insuranceCost: roundWhole(insuranceCost),
     netCost: net.toNumber(),
     taxes: taxLines,
-    totalTax: totalTax.toNumber(),
+    totalTax: roundTwo(totalTax),
+    // CHF tax is displayed at 0.05 precision, but the website charges a
+    // whole-franc final amount. Make that rounding difference explicit.
+    roundingAdjustment: roundTwo(money(roundWhole(total)).minus(total)),
     total: roundWhole(total),
   };
 };

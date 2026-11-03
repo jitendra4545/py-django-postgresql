@@ -260,7 +260,7 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
         requested.requestedHours ??
         (reservation.service_code === 'CHAUFFEUR' ? Number(row.days) : undefined),
       distanceKm,
-      insuranceType: changes.insuranceType ?? draftDetails.insuranceType ?? 'NONE',
+      insuranceType: changes.insuranceType ?? draftDetails.insuranceType,
       pickupCityId: pickup.cityId,
       dropoffCityId: dropoff?.cityId,
       optionSelections,
@@ -431,7 +431,7 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
             : {}),
           ...(Object.hasOwn(changes, 'notes') ? { notes: changes.notes } : {}),
           options: optionSelections,
-          insuranceType: changes.insuranceType ?? draftDetails.insuranceType ?? 'NONE',
+          insuranceType: changes.insuranceType ?? draftDetails.insuranceType,
         }),
         draft.id,
       ],

@@ -31,6 +31,15 @@ export const buildDraftQuote = async (draft) => {
       'Vehicle class and at least one trip leg are required',
     );
   }
+  // Do not silently accept a coupon and then charge full price. The legacy
+  // coupon rules/tables have not been supplied for this mobile backend.
+  if (details.couponCode) {
+    throw new AppError(
+      422,
+      'COUPON_PRICING_UNAVAILABLE',
+      'Coupon pricing is not configured for mobile checkout; do not apply this code',
+    );
+  }
   const legQuotes = [];
   const selected = [];
   for (const [index, leg] of details.legs.entries()) {
@@ -69,7 +78,7 @@ export const buildDraftQuote = async (draft) => {
       endAt: end.toISOString(),
       requestedHours: leg.requestedHours,
       distanceKm,
-      insuranceType: details.insuranceType ?? 'NONE',
+      insuranceType: details.insuranceType,
       pickupCityId: leg.pickup.cityId,
       dropoffCityId: leg.dropoff?.cityId,
       optionSelections: details.options ?? [],

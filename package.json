@@ -27,7 +27,9 @@
     "stripe:check": "node scripts/check-stripe-connection.js",
     "test:stripe-network": "node scripts/test-stripe-network.js",
     "notifications:selftest": "node --experimental-test-module-mocks scripts/selftest-expo-notifications.mjs",
-    "telnyx:check": "node scripts/check-telnyx-integration.js"
+    "telnyx:check": "node scripts/check-telnyx-integration.js",
+    "pricing:selftest": "node scripts/selftest-pricing-parity.mjs",
+    "pricing:integration-selftest": "node scripts/selftest-pricing-integration.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.891.0",

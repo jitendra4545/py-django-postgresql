@@ -71,7 +71,11 @@ const legSchema = z.object({
 });
 const detailsSchema = z.object({
   vehicleClassId: z.number().int().positive(),
-  insuranceType: z.enum(['NONE', 'HALF', 'FULL']).default('NONE'),
+  // Omission allows an included (free) half-coverage policy to be selected
+  // by the quote service. Explicit NONE is still honored for compatibility.
+  insuranceType: z.enum(['NONE', 'HALF', 'FULL']).optional(),
+  // A blank coupon field in the booking form is not an applied coupon.
+  couponCode: z.string().trim().max(64).optional(),
   passenger: z.object({
     fullName: z.string().min(2).max(191),
     email: z.string().email().optional(),
@@ -275,9 +279,10 @@ router.post(
       });
       payment = {
         status: 'FAILED',
-        error: code === 'STRIPE_UNREACHABLE'
-          ? 'Backend cannot reach Stripe. Restore connectivity and use payment retry for this payment ID.'
-          : 'Stripe payment setup failed; check server configuration and payment record.',
+        error:
+          code === 'STRIPE_UNREACHABLE'
+            ? 'Backend cannot reach Stripe. Restore connectivity and use payment retry for this payment ID.'
+            : 'Stripe payment setup failed; check server configuration and payment record.',
         code,
       };
       await query(

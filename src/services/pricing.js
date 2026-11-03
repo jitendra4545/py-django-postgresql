@@ -7,6 +7,7 @@ import {
   amountForDuration,
   billableUnits,
   currencyForCountry,
+  optionBillingDays,
   transferTierAmount,
 } from './legacy-pricing-rules.js';
 
@@ -22,7 +23,7 @@ export const calculateQuote = async ({
   distanceKm = null,
   pickupCityId,
   dropoffCityId,
-  insuranceType = 'NONE',
+  insuranceType,
   optionSelections = [],
   vehicleId = null,
   pickup = null,
@@ -38,6 +39,7 @@ export const calculateQuote = async ({
     throw new AppError(422, 'MANUAL_QUOTE_REQUIRED', `${serviceCode} requires back-office pricing`);
   }
   const units = billableUnits({ serviceCode, startAt, endAt, requestedHours });
+  const billedDays = optionBillingDays({ serviceCode, billableUnits: units });
   const klass = await fetchOne(
     `SELECT id,rental_type,one_way_drop_off_charge,car_with_driver_free_km,
             car_with_driver_extra_cost_per_km,half_insurance_amount,full_insurance_amount,
@@ -167,18 +169,31 @@ export const calculateQuote = async ({
   if (options.length !== selectedIds.length) {
     throw new AppError(422, 'OPTION_UNAVAILABLE', 'An extra is not offered for this vehicle class');
   }
+  // In the website, included half insurance is checked by default.
+  // Never assume an undefined or NULL legacy insurance price is 'included':
+  // require a zero amount AND a configured coverage description.
+  const halfInsuranceIncluded =
+    serviceCode === 'CAR_RENTAL' &&
+    klass.half_insurance_amount != null &&
+    Number(klass.half_insurance_amount) === 0 &&
+    [klass.half_insurance_text_en, klass.half_insurance_text_de, klass.half_insurance_text_fr].some(
+      (text) => typeof text === 'string' && text.trim().length > 0,
+    );
+  const resolvedInsuranceType = insuranceType ?? (halfInsuranceIncluded ? 'HALF' : 'NONE');
   if (
-    !['NONE', 'HALF', 'FULL'].includes(insuranceType) ||
-    (insuranceType !== 'NONE' && serviceCode !== 'CAR_RENTAL')
+    !['NONE', 'HALF', 'FULL'].includes(resolvedInsuranceType) ||
+    (resolvedInsuranceType !== 'NONE' && serviceCode !== 'CAR_RENTAL')
   ) {
     throw new AppError(422, 'INSURANCE_UNAVAILABLE', 'This insurance choice is not offered');
   }
-  const insuranceCost =
-    insuranceType === 'HALF'
-      ? klass.half_insurance_amount
-      : insuranceType === 'FULL'
-        ? klass.full_insurance_amount
+  const insuranceUnitAmount =
+    resolvedInsuranceType === 'HALF'
+      ? Number(klass.half_insurance_amount ?? 0)
+      : resolvedInsuranceType === 'FULL'
+        ? Number(klass.full_insurance_amount ?? 0)
         : 0;
+  // Full insurance is displayed by the legacy website as CHF X/day.
+  const insuranceCost = serviceCode === 'CAR_RENTAL' ? insuranceUnitAmount * billedDays : 0;
   const km = distanceKm == null ? null : Number(distanceKm);
   if (km !== null && (!Number.isFinite(km) || km < 0)) {
     throw new AppError(422, 'INVALID_DISTANCE', 'Invalid route distance');
@@ -196,12 +211,12 @@ export const calculateQuote = async ({
       ? Math.max(km - freeKm, 0) * Number(klass.car_with_driver_extra_cost_per_km || 0)
       : 0;
   const insuranceText =
-    insuranceType === 'NONE'
+    resolvedInsuranceType === 'NONE'
       ? null
       : {
-          en: klass[`${insuranceType.toLowerCase()}_insurance_text_en`] ?? null,
-          de: klass[`${insuranceType.toLowerCase()}_insurance_text_de`] ?? null,
-          fr: klass[`${insuranceType.toLowerCase()}_insurance_text_fr`] ?? null,
+          en: klass[`${resolvedInsuranceType.toLowerCase()}_insurance_text_en`] ?? null,
+          de: klass[`${resolvedInsuranceType.toLowerCase()}_insurance_text_de`] ?? null,
+          fr: klass[`${resolvedInsuranceType.toLowerCase()}_insurance_text_fr`] ?? null,
         };
   if (serviceCode === 'CAR_RENTAL' && Number(klass.one_way_drop_off_charge) > 0 && km === null) {
     throw new AppError(
@@ -224,9 +239,9 @@ export const calculateQuote = async ({
     //   'SELECT locality,country FROM vehicle_cities WHERE vehicle_id=? AND deleted_at IS NULL ORDER BY id',
     //   [vehicleId],
     // );
-    
+
     const originalCities = await fetchAll(
-  `SELECT
+      `SELECT
        vc.city_id,
        c.country_id,
        vc.locality,
@@ -236,33 +251,39 @@ export const calculateQuote = async ({
    WHERE vc.vehicle_id = ?
      AND vc.deleted_at IS NULL
    ORDER BY vc.id`,
-  [vehicleId]
-);
+      [vehicleId],
+    );
     // const matches = (point) =>
     //   originalCities.some(
     //     (row) =>
     //       String(row.locality || '').toLowerCase() === String(point.city || '').toLowerCase() &&
     //       String(row.country || '').toUpperCase() === String(country.code || '').toUpperCase(),
     //   );
-    
-    
-    
-    const matches = (point) =>
-  originalCities.some((row) => {
-    if (point?.cityId != null && point?.countryId != null) {
-      return (
-        Number(row.city_id) === Number(point.cityId) &&
-        Number(row.country_id) === Number(point.countryId)
-      );
-    }
 
-    return (
-      String(row.locality || "").trim().toLowerCase() ===
-        String(point?.city || "").trim().toLowerCase() &&
-      String(row.country || "").trim().toUpperCase() ===
-        String(country.code || "").trim().toUpperCase()
-    );
-  });
+    const matches = (point) =>
+      originalCities.some((row) => {
+        if (point?.cityId != null && point?.countryId != null) {
+          return (
+            Number(row.city_id) === Number(point.cityId) &&
+            Number(row.country_id) === Number(point.countryId)
+          );
+        }
+
+        return (
+          String(row.locality || '')
+            .trim()
+            .toLowerCase() ===
+            String(point?.city || '')
+              .trim()
+              .toLowerCase() &&
+          String(row.country || '')
+            .trim()
+            .toUpperCase() ===
+            String(country.code || '')
+              .trim()
+              .toUpperCase()
+        );
+      });
     if (originalCities.length && !matches(pickup) && !matches(dropoff)) {
       isPickupAndCollection = true;
       const original = { address: `${originalCities[0].locality}, ${originalCities[0].country}` };
@@ -292,7 +313,7 @@ export const calculateQuote = async ({
     serviceCode,
     rateAmount: amount,
     rateIsTotal: true,
-    durationDays: units,
+    durationDays: billedDays,
     options,
     optionSelections,
     taxes,
@@ -304,16 +325,26 @@ export const calculateQuote = async ({
   return {
     currency,
     vehicleClassId,
-    durationDays: units,
+    durationDays: billedDays,
     billableUnits: units,
-    // Chauffeur billable units are hours; expose this explicitly so Expo
-    // clients never mistake durationDays for days or use Google's route ETA.
-    ...(serviceCode === 'CHAUFFEUR' ? { billableHours: units } : {}),
+    // Base-rate units are hours for chauffeur, rental days for car rental.
+    // Per-day child seats/insurance use durationDays instead of these hours.
+    ...(serviceCode === 'CHAUFFEUR'
+      ? {
+          billableHours: units,
+          includedDistanceKm: freeKm,
+          freeKmPerHour: Number(klass.car_with_driver_free_km || 0) / 8,
+          extraCostPerKm: Number(klass.car_with_driver_extra_cost_per_km || 0),
+        }
+      : {}),
     rentalSeasonId: seasonId,
     durationBandId: durationBand?.id ?? null,
     distanceKm: km,
-    insuranceType,
+    insuranceType: resolvedInsuranceType,
     insuranceText,
+    insuranceIncluded: halfInsuranceIncluded && resolvedInsuranceType === 'HALF',
+    insuranceUnitAmount,
+    insuranceBillingDays: serviceCode === 'CAR_RENTAL' ? billedDays : 0,
     isPickupAndCollection,
     lines,
     sourceRateId,

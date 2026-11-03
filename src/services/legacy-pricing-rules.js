@@ -31,6 +31,19 @@ export const billableUnits = ({ serviceCode, startAt, endAt, requestedHours }) =
   throw new AppError(422, 'INVALID_SERVICE', 'Unknown priced service');
 };
 
+// Daily extras (e.g. child seats) are not multiplied by chauffeur *hours*.
+// The website labels based_on=1 extras as per-day across all three services.
+export const optionBillingDays = ({ serviceCode, billableUnits }) => {
+  if (serviceCode === 'TRANSFER') return 1;
+  const units = Number(billableUnits);
+  if (!Number.isFinite(units) || units <= 0) {
+    throw new AppError(422, 'INVALID_BOOKING_DURATION', 'A positive billable duration is required');
+  }
+  if (serviceCode === 'CAR_RENTAL') return Math.ceil(units);
+  if (serviceCode === 'CHAUFFEUR') return Math.ceil(units / 24);
+  throw new AppError(422, 'INVALID_SERVICE', 'Unknown priced service');
+};
+
 export const amountForDuration = (bandAmount, bandSpan, units) => {
   if (!Number.isFinite(Number(bandSpan)) || Number(bandSpan) <= 0) {
     throw new AppError(

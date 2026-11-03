@@ -25,7 +25,7 @@ New checkout reservations use `DL` followed by zero-padded `3614 + reservations.
 
 `transfer_city_wise_prices` is the table name used by the PHP model and this backend. The word `prizes` is a spelling variation, not a separate table in the reviewed code. The saved city IDs must correspond to rows in `cities` on the **live** database; address strings alone do not match city-pair rates.
 
-All new quote component amounts, tax lines, and totals are rounded to whole currency units before storing costs and creating a payment intent, as required by the supplied reservation PDF. Stripe still receives minor units (`whole total × 100`). For example, an amount of 101.4 and 7.7% tax becomes base 101, tax 8, total 109. Re-quote older unconfirmed drafts before checkout; previously stored quotes may have cent-based totals.
+Base rates, optional extras, fees, and final payment totals continue to be rounded to whole currency units; **Swiss (CHF) tax lines are now rounded to the nearest CHF 0.05 to match the customer website**. The quote exposes `lines.roundingAdjustment` to reconcile whole-franc totals with displayed CHF tax. Other currencies retain the old whole-unit tax rounding pending verified comparisons. Stripe receives the whole payable total converted to minor units (`total × 100`). Re-quote older unconfirmed drafts before checkout; do not alter confirmed reservations. See `CLIENT_WEBSITE_PRICING_ALIGNMENT_2026-11-03.md`.
 
 ## Availability and location checks
 
