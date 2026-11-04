@@ -21,8 +21,8 @@ export const releasePendingHold = async (connection, reservationId) => {
     reservationId,
   ]);
   await connection.execute(
-    `UPDATE app_reservation_meta SET lifecycle_status='CANCELLED',updated_at=NOW()
-      WHERE reservation_id=?`,
+    `UPDATE reservations SET lifecycle_status='CANCELLED',updated_at=NOW()
+      WHERE id=?`,
     [reservationId],
   );
   await connection.execute(

@@ -100,14 +100,14 @@
 //           [env.LEGACY_PAID_PAYMENT_STATUS, payment.reservation_id],
 //         );
 //         await connection.execute(
-//           `UPDATE app_reservation_meta
+//           `UPDATE reservations
 //               SET lifecycle_status=CASE
 //                     WHEN lifecycle_status='PAYMENT_PENDING' THEN 'CONFIRMED'
 //                     WHEN lifecycle_status='CHANGE_PAYMENT_PENDING' THEN 'CONFIRMED'
 //                     ELSE lifecycle_status
 //                   END,
 //                   updated_at=NOW()
-//             WHERE reservation_id=?`,
+//             WHERE id=?`,
 //           [payment.reservation_id],
 //         );
 //         await connection.execute(
@@ -154,12 +154,12 @@
 //             payment.reservation_id,
 //           ]);
 //           await connection.execute(
-//             `UPDATE app_reservation_meta SET lifecycle_status='CANCELLED',updated_at=NOW() WHERE reservation_id=?`,
+//             `UPDATE reservations SET lifecycle_status='CANCELLED',updated_at=NOW() WHERE id=?`,
 //             [payment.reservation_id],
 //           );
 //           await connection.execute(
-//             `UPDATE app_driver_assignments SET status='CANCELLED',updated_at=NOW()
-//               WHERE reservation_id=? AND status NOT IN ('COMPLETED','CANCELLED')`,
+//             `UPDATE reservation_drivers SET app_assignment_status='CANCELLED',status=2,updated_at=NOW()
+//               WHERE reservation_id=? AND COALESCE(app_assignment_status,'OFFERED') NOT IN ('COMPLETED','CANCELLED')`,
 //             [payment.reservation_id],
 //           );
 //           await connection.execute('DELETE FROM vehicle_reserved_dates WHERE reservation_id=?', [
@@ -321,7 +321,7 @@
 //           [env.LEGACY_PAID_PAYMENT_STATUS, payment.reservation_id],
 //         );
 //         await connection.execute(
-//           `UPDATE app_reservation_meta SET lifecycle_status='CONFIRMED',updated_at=NOW() WHERE reservation_id=?`,
+//           `UPDATE reservations SET lifecycle_status='CONFIRMED',updated_at=NOW() WHERE id=?`,
 //           [payment.reservation_id],
 //         );
 //         await connection.execute(
@@ -509,7 +509,7 @@ router.post(
         );
 
         await connection.execute(
-          `UPDATE app_reservation_meta
+          `UPDATE reservations
            SET lifecycle_status=
              CASE
                WHEN lifecycle_status='PAYMENT_PENDING'
@@ -519,7 +519,7 @@ router.post(
                ELSE lifecycle_status
              END,
              updated_at=NOW()
-           WHERE reservation_id=?`,
+           WHERE id=?`,
           [payment.reservation_id],
         );
 
@@ -616,19 +616,19 @@ router.post(
           );
 
           await connection.execute(
-            `UPDATE app_reservation_meta
+            `UPDATE reservations
              SET lifecycle_status='CANCELLED',
                  updated_at=NOW()
-             WHERE reservation_id=?`,
+             WHERE id=?`,
             [payment.reservation_id],
           );
 
           await connection.execute(
-            `UPDATE app_driver_assignments
-             SET status='CANCELLED',
+            `UPDATE reservation_drivers
+             SET app_assignment_status='CANCELLED',status=2,
                  updated_at=NOW()
              WHERE reservation_id=?
-               AND status NOT IN (
+               AND COALESCE(app_assignment_status,'OFFERED') NOT IN (
                  'COMPLETED',
                  'CANCELLED'
                )`,
@@ -939,10 +939,10 @@ router.post(
         );
 
         await connection.execute(
-          `UPDATE app_reservation_meta
+          `UPDATE reservations
            SET lifecycle_status='CONFIRMED',
                updated_at=NOW()
-           WHERE reservation_id=?`,
+           WHERE id=?`,
           [payment.reservation_id],
         );
 

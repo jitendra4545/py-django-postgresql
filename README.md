@@ -1,3 +1,5 @@
+> **Staging ZIP update (2026-11-04):** See `docs/FINAL_TESTING_HANDOVER_2026-11-04.md` for original/new table inventories, migration 008 status-view fixes, UTC timestamp handling, and test commands. This is not production-certified.
+
 # Drive Luxury Backend — Release 1
 
 Production-oriented Express 5 / MySQL API for:
@@ -40,9 +42,9 @@ Rental inspections and all AI/OCR/predictive features are deferred. See [docs/RE
 
 ## Requirements
 
-- Node.js 20+
-- MySQL 8+
-- Existing `drive_luxury` schema. The supplied SQL export is incomplete for the fleet/rate tables, so verify against a staging clone before production.
+- Node.js 22.12+
+- MariaDB 10.6+ (matching the supplied website schema) or a verified compatible MySQL version
+- A **complete staging clone** of the original Drive Luxury website database, including messaging and trip-status tables. The supplied SQL export has 165 table definitions but no representative row data. Check `DB_NAME` explicitly; the original exported database name is `o56gps_reza_drive_luxury`, not the fallback `drive_luxury`.
 
 ## Setup
 
@@ -50,6 +52,7 @@ Rental inspections and all AI/OCR/predictive features are deferred. See [docs/RE
 cp .env.example .env
 npm install
 npm run verify:schema
+npm run db:preflight  # read-only: blocks wrong/incomplete DBs
 npm run migrate
 npm test
 npm run dev
@@ -65,7 +68,7 @@ Browser password-reset page: `http://localhost:3000/reset-password?token=...`
 
 1. Restore/snapshot the target database in staging.
 2. Configure Google OAuth client IDs, Infomaniak SMTP, Stripe, Expo, DB TLS and private storage credentials.
-3. Run `npm run verify:schema`.
+3. Run `npm run verify:schema` and `npm run db:preflight` (both read-only).
 4. Review and apply all SQL migrations through `npm run migrate`.
 5. Compare seasonal, duration, transfer, pickup/collection, option and tax quotes against PHP production examples.
 6. Run integration tests against a staging clone.
@@ -148,3 +151,32 @@ this table; it does not rerun older migrations or bypass historical checksums.
 
 See [API_DATABASE_REQUEST_LOGGING.md](docs/API_DATABASE_REQUEST_LOGGING.md) for
 sample MySQL queries, privacy redaction, retention, queue behavior and testing.
+
+## Legacy-first production database integration (2026-11-03)
+
+This release uses the original Drive Luxury website tables as the authority for
+reservations, trip legs, chauffeur assignments, messages and notifications,
+with 30 additive mobile columns and six compatibility SQL views. It preserves
+the existing HTTP API/OpenAPI contract. **Read
+`docs/LEGACY_FIRST_DATABASE_MIGRATION.md` before running any migrations**:
+the new migration is for a fresh mobile-schema installation on a staging clone
+of the client's website database, and intentionally stops on older app migration
+checksum conflicts rather than altering the live schema unsafely.
+
+Static schema check: `npm run legacy-first:selftest` (no database). After
+staging migration: `npm run verify:legacy-first` (reads live staging schema).
+
+
+### November 4 test-log fixes
+
+When `verify:legacy-first` reports missing original `reservation_messages`,
+`notifications`, `reservation_driver_statuses` or `reservation_statuses`, the
+connected DB is not the complete original website schema. The verifier for app
+views/columns runs **after** successful migrations, not before. Check `.env`
+`DB_HOST` and `DB_NAME`, then run `npm run db:preflight`; migration now refuses
+an incomplete DB before altering anything. Vitest excludes the separate
+Node built-in compatibility test suite; run that suite with
+`npm run compat:selftest`. SQL migration files 000–008 were not modified and
+existing migration checksums remain valid.
+
+For the November 4 verification failures, see [safe staging runbook](docs/TEST_LOG_FIXES_AND_SAFE_STAGING_RUN_2026-11-04.md).

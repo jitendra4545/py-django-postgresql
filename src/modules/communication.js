@@ -216,9 +216,11 @@ router.post(
     }
     const result = await transaction(async (connection) => {
       const [created] = await connection.execute(
-        `INSERT INTO app_messages (conversation_id,sender_user_id,message_type,body,document_id,created_at) VALUES (?,?,?,?,?,NOW())`,
+        `INSERT INTO reservation_messages
+          (reservation_id,sender_id,message_type,body,document_id,created_at,updated_at)
+         VALUES (?,?,?,?,?,NOW(),NOW())`,
         [
-          conversation.id,
+          conversation.reservationId,
           request.auth.userId,
           request.body.messageType,
           request.body.body?.trim() ?? null,

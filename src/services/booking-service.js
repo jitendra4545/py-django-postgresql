@@ -205,20 +205,14 @@ export const createLegacyReservation = async (connection, { draft, quote, auth }
     reservationNo,
     reservationId,
   ]);
+  // The existing website reservation row owns the mobile extension fields.
+  // Only ADDITIVE columns are updated; no original keys or identity fields change.
   await connection.execute(
-    `INSERT INTO app_reservation_meta
-      (reservation_id, service_code, source_channel, created_by_user_id, created_by_agent_id,
-       lifecycle_status, currency_code, quote_snapshot_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 'PAYMENT_PENDING', ?, ?, NOW(), NOW())`,
-    [
-      reservationId,
-      draft.service_code,
-      auth.role === 4 ? 'AGENCY_AGENT_APP' : 'CLIENT_APP',
-      auth.userId,
-      auth.agentId ?? null,
-      quote.currency,
-      draft.quote_snapshot_id,
-    ],
+    `UPDATE reservations SET service_code=?,source_channel=?,created_by_user_id=?,
+       created_by_agent_id=?,lifecycle_status='PAYMENT_PENDING',currency_code=?,
+       quote_snapshot_id=?,updated_at=NOW() WHERE id=?`,
+    [draft.service_code,auth.role === 4 ? 'AGENCY_AGENT_APP' : 'CLIENT_APP',
+     auth.userId,auth.agentId ?? null,quote.currency,draft.quote_snapshot_id,reservationId],
   );
 
   for (const [index, leg] of details.legs.entries()) {
@@ -261,23 +255,17 @@ export const createLegacyReservation = async (connection, { draft, quote, auth }
       ],
     );
     const detailId = detailResult.insertId;
+    // Keep each trip leg in the original reservation_details row; no shadow leg.
     await connection.execute(
-      `INSERT INTO app_reservation_leg_meta
-        (reservation_id, reservation_details_id, sequence_no, vehicle_class_id, passenger_count,
-         luggage_count, pickup_details, dropoff_details, flight_number, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', NOW(), NOW())`,
-      [
-        reservationId,
-        detailId,
-        index + 1,
-        details.vehicleClassId,
-        details.passenger?.count ?? 1,
-        details.passenger?.luggageCount ?? 0,
-        JSON.stringify(leg.pickup),
-        JSON.stringify(leg.dropoff ?? {}),
-        details.passenger?.flightNumber ?? null,
-      ],
+      `UPDATE reservation_details SET sequence_no=?,vehicle_class_id=?,passenger_count=?,
+        luggage_count=?,pickup_details=?,dropoff_details=?,flight_number=?,
+        app_leg_status='PENDING',updated_at=NOW() WHERE id=? AND reservation_id=?`,
+      [index + 1,details.vehicleClassId,details.passenger?.count ?? 1,
+       details.passenger?.luggageCount ?? 0,JSON.stringify(leg.pickup),
+       JSON.stringify(leg.dropoff ?? {}),details.passenger?.flightNumber ?? null,
+       detailId,reservationId],
     );
+
     const stops = [...(leg.stops ?? []), ...(leg.dropoff ? [leg.dropoff] : [])];
     for (const [stopIndex, stop] of stops.entries()) {
       await connection.execute(

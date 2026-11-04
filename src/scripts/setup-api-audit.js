@@ -28,9 +28,12 @@ try {
   if (missing.length) {
     throw new Error(`app_api_request_logs exists but has missing columns: ${missing.join(', ')}`);
   }
+  const [[server]] = await connection.query('SELECT VERSION() AS version');
+  const mariaDb = /mariadb/i.test(server.version);
   for (const column of ['request_query', 'request_body', 'response_body']) {
-    if (columns.find((item) => item.name === column)?.type?.toLowerCase() !== 'json') {
-      throw new Error(`app_api_request_logs.${column} must be a MySQL JSON column`);
+    const type = columns.find((item) => item.name === column)?.type?.toLowerCase();
+    if (type !== 'json' && !(mariaDb && type === 'longtext')) {
+      throw new Error(`app_api_request_logs.${column} must be a JSON-compatible column`);
     }
   }
 

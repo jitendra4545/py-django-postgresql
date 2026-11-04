@@ -210,10 +210,10 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
       ],
     );
     await connection.execute(
-      `UPDATE app_reservation_leg_meta
+      `UPDATE reservation_details
           SET vehicle_class_id=?,passenger_count=?,luggage_count=?,pickup_details=?,dropoff_details=?,
               flight_number=?,updated_at=NOW()
-        WHERE reservation_details_id=?`,
+        WHERE id=?`,
       [
         vehicleClassId,
         passenger.count ?? row.passenger_count,
@@ -410,8 +410,8 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
 
   if (requiresReassignment) {
     await connection.execute(
-      `UPDATE app_driver_assignments SET status='CANCELLED',updated_at=NOW()
-        WHERE reservation_id=? AND status NOT IN ('COMPLETED','CANCELLED')`,
+      `UPDATE reservation_drivers SET app_assignment_status='CANCELLED',status=2,updated_at=NOW()
+        WHERE reservation_id=? AND COALESCE(app_assignment_status,'OFFERED') NOT IN ('COMPLETED','CANCELLED')`,
       [reservation.id],
     );
   }

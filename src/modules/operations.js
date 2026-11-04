@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { toUtcSqlDateTime } from '../common/utc-sql-datetime.js';
 import { z } from 'zod';
 import { asyncHandler } from '../common/async-handler.js';
 import { requireAuth, requireRoles } from '../common/auth.js';
@@ -209,8 +210,8 @@ router.get(
   validate(
     z
       .object({
-        startAt: z.string().datetime(),
-        endAt: z.string().datetime(),
+        startAt: z.string().datetime({ offset: true }),
+        endAt: z.string().datetime({ offset: true }),
         countryId: z.coerce.number().int().positive().optional(),
         cityId: z.coerce.number().int().positive().optional(),
         providerId: z.coerce.number().int().positive().optional(),
@@ -221,8 +222,8 @@ router.get(
     'query',
   ),
   asyncHandler(async (request, response) => {
-    const start = request.query.startAt.slice(0, 19).replace('T', ' ');
-    const end = request.query.endAt.slice(0, 19).replace('T', ' ');
+    const start = toUtcSqlDateTime(request.query.startAt);
+    const end = toUtcSqlDateTime(request.query.endAt);
     const filters = [];
     const params = [end, start];
     for (const [field, column] of [
@@ -328,7 +329,7 @@ router.post(
         ],
       );
       await connection.execute(
-        'UPDATE app_reservation_meta SET lifecycle_status=?,updated_at=NOW() WHERE reservation_id=?',
+        'UPDATE reservations SET lifecycle_status=?,updated_at=NOW() WHERE id=?',
         [status, reservation.id],
       );
       await connection.execute(
@@ -362,13 +363,13 @@ router.post(
   validate(
     z.object({
       driverId: z.number().int().positive(),
-      scheduledStartAt: z.string().datetime(),
-      scheduledEndAt: z.string().datetime(),
+      scheduledStartAt: z.string().datetime({ offset: true }),
+      scheduledEndAt: z.string().datetime({ offset: true }),
     }),
   ),
   asyncHandler(async (request, response) => {
-    const start = request.body.scheduledStartAt.slice(0, 19).replace('T', ' ');
-    const end = request.body.scheduledEndAt.slice(0, 19).replace('T', ' ');
+    const start = toUtcSqlDateTime(request.body.scheduledStartAt);
+    const end = toUtcSqlDateTime(request.body.scheduledEndAt);
     const result = await transaction(async (connection) => {
       const [details] = await connection.execute(
         `SELECT rd.id,rd.reservation_id FROM reservation_details rd JOIN app_reservation_meta arm ON arm.reservation_id=rd.reservation_id WHERE rd.id=? AND rd.reservation_id=? AND arm.lifecycle_status IN ('CONFIRMED','ASSIGNED') FOR UPDATE`,
@@ -386,34 +387,23 @@ router.post(
       );
       if (conflicts[0]) throw conflict('The chauffeur already has an overlapping assignment');
       await connection.execute(
-        `UPDATE app_driver_assignments SET status='CANCELLED',updated_at=NOW() WHERE reservation_details_id=? AND status NOT IN ('COMPLETED','CANCELLED','DECLINED')`,
+        `UPDATE reservation_drivers SET app_assignment_status='CANCELLED',status=2,updated_at=NOW() WHERE reservation_details_id=? AND COALESCE(app_assignment_status,'OFFERED') NOT IN ('COMPLETED','CANCELLED','DECLINED')`,
         [request.params.detailId],
       );
-      const [legacy] = await connection.execute(
-        `INSERT INTO reservation_drivers (reservation_id,reservation_details_id,pick_up_date,pick_up_time,pick_up_driver_id,user_id,status,created_at,updated_at) VALUES (?,?,DATE(?),TIME(?),?,?,1,NOW(),NOW())`,
-        [
-          request.params.reservationId,
-          request.params.detailId,
-          start,
-          start,
-          request.body.driverId,
-          request.auth.userId,
-        ],
-      );
+      // One physical chauffeur assignment only, in the production website table.
+      // The mobile assignment ID is the original reservation_drivers.id.
       const [assignment] = await connection.execute(
-        `INSERT INTO app_driver_assignments (reservation_id,reservation_details_id,legacy_reservation_driver_id,driver_id,status,scheduled_start_at,scheduled_end_at,assigned_by_user_id,created_at,updated_at) VALUES (?,?,?,?,'OFFERED',?,?,?,NOW(),NOW())`,
-        [
-          request.params.reservationId,
-          request.params.detailId,
-          legacy.insertId,
-          request.body.driverId,
-          start,
-          end,
-          request.auth.userId,
-        ],
+        `INSERT INTO reservation_drivers
+          (reservation_id,reservation_details_id,pick_up_date,pick_up_time,
+           pick_up_driver_id,user_id,status,app_assignment_status,scheduled_start_at,
+           scheduled_end_at,assigned_by_user_id,created_at,updated_at)
+         VALUES (?,?,DATE(?),TIME(?),?, ?,1,'OFFERED',?,?,?,NOW(),NOW())`,
+        [request.params.reservationId,request.params.detailId,start,start,
+         request.body.driverId,request.auth.userId,start,end,request.auth.userId],
       );
+
       await connection.execute(
-        `UPDATE app_reservation_meta SET lifecycle_status='ASSIGNED',updated_at=NOW() WHERE reservation_id=?`,
+        `UPDATE reservations SET lifecycle_status='ASSIGNED',updated_at=NOW() WHERE id=?`,
         [request.params.reservationId],
       );
       await connection.execute(
@@ -463,8 +453,8 @@ router.get(
         vehicleClassId: z.coerce.number().int().positive(),
         countryId: z.coerce.number().int().positive().optional(),
         cityId: z.coerce.number().int().positive().optional(),
-        startAt: z.string().datetime(),
-        endAt: z.string().datetime(),
+        startAt: z.string().datetime({ offset: true }),
+        endAt: z.string().datetime({ offset: true }),
       })
       .refine((value) => new Date(value.endAt) > new Date(value.startAt), {
         message: 'endAt must be after startAt',
@@ -641,7 +631,7 @@ router.post(
           [request.body.resolutionNote, request.auth.userId, item.id],
         );
         await connection.execute(
-          `UPDATE app_reservation_meta SET lifecycle_status=?,updated_at=NOW() WHERE reservation_id=?`,
+          `UPDATE reservations SET lifecycle_status=?,updated_at=NOW() WHERE id=?`,
           [item.previous_lifecycle_status, item.reservation_id],
         );
         await writeActivityLog(connection, {
@@ -711,7 +701,7 @@ router.post(
         [request.body.resolutionNote, request.auth.userId, item.id],
       );
       await connection.execute(
-        `UPDATE app_reservation_meta SET lifecycle_status=?,updated_at=NOW() WHERE reservation_id=?`,
+        `UPDATE reservations SET lifecycle_status=?,updated_at=NOW() WHERE id=?`,
         [lifecycleStatus, item.reservation_id],
       );
       await connection.execute(
@@ -850,11 +840,11 @@ router.post(
           [request.auth.userId, item.reservation_id],
         );
         await connection.execute(
-          `UPDATE app_reservation_meta SET lifecycle_status='CANCELLED',updated_at=NOW() WHERE reservation_id=?`,
+          `UPDATE reservations SET lifecycle_status='CANCELLED',updated_at=NOW() WHERE id=?`,
           [item.reservation_id],
         );
         await connection.execute(
-          `UPDATE app_driver_assignments SET status='CANCELLED',updated_at=NOW() WHERE reservation_id=? AND status NOT IN ('COMPLETED','CANCELLED')`,
+          `UPDATE reservation_drivers SET app_assignment_status='CANCELLED',status=2,updated_at=NOW() WHERE reservation_id=? AND COALESCE(app_assignment_status,'OFFERED') NOT IN ('COMPLETED','CANCELLED')`,
           [item.reservation_id],
         );
         await connection.execute(`DELETE FROM vehicle_reserved_dates WHERE reservation_id=?`, [
@@ -873,12 +863,12 @@ router.post(
           );
         }
         await connection.execute(
-          `UPDATE app_reservation_meta SET lifecycle_status='CANCELLATION_APPROVED',updated_at=NOW() WHERE reservation_id=?`,
+          `UPDATE reservations SET lifecycle_status='CANCELLATION_APPROVED',updated_at=NOW() WHERE id=?`,
           [item.reservation_id],
         );
       } else {
         await connection.execute(
-          `UPDATE app_reservation_meta SET lifecycle_status=?,updated_at=NOW() WHERE reservation_id=?`,
+          `UPDATE reservations SET lifecycle_status=?,updated_at=NOW() WHERE id=?`,
           [item.previous_lifecycle_status, item.reservation_id],
         );
       }

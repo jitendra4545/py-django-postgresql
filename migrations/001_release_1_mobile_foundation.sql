@@ -7,33 +7,6 @@ CREATE TABLE IF NOT EXISTS app_schema_migrations (
   UNIQUE KEY uq_app_schema_migrations_filename (filename)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE IF NOT EXISTS app_service_catalog (
-  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  code VARCHAR(40) NOT NULL,
-  title VARCHAR(191) NOT NULL,
-  description TEXT NULL,
-  icon_url VARCHAR(500) NULL,
-  booking_mode ENUM('INSTANT','MANUAL_REQUEST') NOT NULL,
-  legacy_service_id BIGINT UNSIGNED NULL,
-  is_active TINYINT(1) NOT NULL DEFAULT 1,
-  display_order INT NOT NULL DEFAULT 0,
-  created_at TIMESTAMP NULL,
-  updated_at TIMESTAMP NULL,
-  PRIMARY KEY (id),
-  UNIQUE KEY uq_app_service_catalog_code (code),
-  KEY idx_app_service_catalog_legacy (legacy_service_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-INSERT INTO app_service_catalog
-  (code,title,description,booking_mode,legacy_service_id,is_active,display_order,created_at,updated_at)
-VALUES
-  ('CHAUFFEUR','Chauffeur Service','Hourly and daily chauffeur service','INSTANT',8,1,10,NOW(),NOW()),
-  ('TRANSFER','Transfer','Airport and point-to-point transfers','INSTANT',7,1,20,NOW(),NOW()),
-  ('CAR_RENTAL','Car Rental','Luxury self-drive rental','INSTANT',10,1,30,NOW(),NOW()),
-  ('AIRPORT_VIP','Airport VIP','Airport VIP assistance submitted for manual confirmation','MANUAL_REQUEST',NULL,1,40,NOW(),NOW()),
-  ('CONCIERGE','Concierge','Bespoke concierge request submitted to the concierge team','MANUAL_REQUEST',NULL,1,50,NOW(),NOW())
-ON DUPLICATE KEY UPDATE title=VALUES(title),description=VALUES(description),booking_mode=VALUES(booking_mode),legacy_service_id=VALUES(legacy_service_id),is_active=VALUES(is_active),display_order=VALUES(display_order),updated_at=NOW();
-
 CREATE TABLE IF NOT EXISTS app_refresh_tokens (
   id CHAR(36) NOT NULL,
   user_id INT UNSIGNED NOT NULL,
@@ -158,83 +131,11 @@ CREATE TABLE IF NOT EXISTS app_quote_snapshots (
   CONSTRAINT fk_app_quote_draft FOREIGN KEY (draft_id) REFERENCES app_booking_drafts(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE IF NOT EXISTS app_reservation_meta (
-  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  reservation_id INT UNSIGNED NOT NULL,
-  service_code VARCHAR(40) NOT NULL,
-  source_channel ENUM('CLIENT_APP','AGENCY_AGENT_APP','BACK_OFFICE') NOT NULL,
-  created_by_user_id INT UNSIGNED NOT NULL,
-  created_by_agent_id INT UNSIGNED NULL,
-  lifecycle_status VARCHAR(40) NOT NULL,
-  currency_code CHAR(3) NOT NULL DEFAULT 'EUR',
-  quote_snapshot_id BIGINT UNSIGNED NULL,
-  created_at TIMESTAMP NULL,
-  updated_at TIMESTAMP NULL,
-  PRIMARY KEY (id),
-  UNIQUE KEY uq_app_reservation_meta_reservation (reservation_id),
-  KEY idx_app_reservation_meta_status (lifecycle_status,service_code),
-  CONSTRAINT fk_app_reservation_meta_reservation FOREIGN KEY (reservation_id) REFERENCES reservations(id),
-  CONSTRAINT fk_app_reservation_meta_user FOREIGN KEY (created_by_user_id) REFERENCES users(id),
-  CONSTRAINT fk_app_reservation_meta_agent FOREIGN KEY (created_by_agent_id) REFERENCES agents(id),
-  CONSTRAINT fk_app_reservation_meta_quote FOREIGN KEY (quote_snapshot_id) REFERENCES app_quote_snapshots(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS app_reservation_leg_meta (
-  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  reservation_id INT UNSIGNED NOT NULL,
-  reservation_details_id INT UNSIGNED NOT NULL,
-  sequence_no INT UNSIGNED NOT NULL,
-  vehicle_class_id INT UNSIGNED NOT NULL,
-  passenger_count INT UNSIGNED NOT NULL DEFAULT 1,
-  luggage_count INT UNSIGNED NOT NULL DEFAULT 0,
-  pickup_details JSON NOT NULL,
-  dropoff_details JSON NULL,
-  flight_number VARCHAR(40) NULL,
-  status VARCHAR(40) NOT NULL DEFAULT 'PENDING',
-  created_at TIMESTAMP NULL,
-  updated_at TIMESTAMP NULL,
-  PRIMARY KEY (id),
-  UNIQUE KEY uq_app_reservation_leg_detail (reservation_details_id),
-  UNIQUE KEY uq_app_reservation_leg_sequence (reservation_id,sequence_no),
-  KEY idx_app_reservation_leg_status (status),
-  CONSTRAINT fk_app_reservation_leg_reservation FOREIGN KEY (reservation_id) REFERENCES reservations(id),
-  CONSTRAINT fk_app_reservation_leg_detail FOREIGN KEY (reservation_details_id) REFERENCES reservation_details(id),
-  CONSTRAINT fk_app_reservation_leg_class FOREIGN KEY (vehicle_class_id) REFERENCES vehicle_classes(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS app_driver_assignments (
-  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  reservation_id INT UNSIGNED NOT NULL,
-  reservation_details_id INT UNSIGNED NOT NULL,
-  legacy_reservation_driver_id INT UNSIGNED NULL,
-  driver_id INT UNSIGNED NOT NULL,
-  status VARCHAR(40) NOT NULL DEFAULT 'OFFERED',
-  scheduled_start_at DATETIME NOT NULL,
-  scheduled_end_at DATETIME NOT NULL,
-  acknowledged_at TIMESTAMP NULL,
-  declined_at TIMESTAMP NULL,
-  decline_reason TEXT NULL,
-  started_at TIMESTAMP NULL,
-  completed_at TIMESTAMP NULL,
-  assigned_by_user_id INT UNSIGNED NOT NULL,
-  created_at TIMESTAMP NULL,
-  updated_at TIMESTAMP NULL,
-  PRIMARY KEY (id),
-  KEY idx_app_driver_assignment_driver_schedule (driver_id,scheduled_start_at,scheduled_end_at),
-  KEY idx_app_driver_assignment_reservation (reservation_id,reservation_details_id),
-  KEY idx_app_driver_assignment_status (status),
-  CONSTRAINT fk_app_driver_assignment_reservation FOREIGN KEY (reservation_id) REFERENCES reservations(id),
-  CONSTRAINT fk_app_driver_assignment_detail FOREIGN KEY (reservation_details_id) REFERENCES reservation_details(id),
-  CONSTRAINT fk_app_driver_assignment_legacy FOREIGN KEY (legacy_reservation_driver_id) REFERENCES reservation_drivers(id),
-  CONSTRAINT fk_app_driver_assignment_driver FOREIGN KEY (driver_id) REFERENCES drivers(id),
-  CONSTRAINT fk_app_driver_assignment_assigner FOREIGN KEY (assigned_by_user_id) REFERENCES users(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 CREATE TABLE IF NOT EXISTS app_booking_status_events (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   reservation_id INT UNSIGNED NOT NULL,
   reservation_details_id INT UNSIGNED NULL,
-  assignment_id BIGINT UNSIGNED NULL,
+  assignment_id INT UNSIGNED NULL,
   status VARCHAR(40) NOT NULL,
   actor_user_id INT UNSIGNED NULL,
   note TEXT NULL,
@@ -247,13 +148,13 @@ CREATE TABLE IF NOT EXISTS app_booking_status_events (
   KEY idx_app_booking_events_assignment (assignment_id,occurred_at),
   CONSTRAINT fk_app_booking_event_reservation FOREIGN KEY (reservation_id) REFERENCES reservations(id),
   CONSTRAINT fk_app_booking_event_detail FOREIGN KEY (reservation_details_id) REFERENCES reservation_details(id),
-  CONSTRAINT fk_app_booking_event_assignment FOREIGN KEY (assignment_id) REFERENCES app_driver_assignments(id),
+  CONSTRAINT fk_app_booking_event_assignment FOREIGN KEY (assignment_id) REFERENCES reservation_drivers(id),
   CONSTRAINT fk_app_booking_event_actor FOREIGN KEY (actor_user_id) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS app_driver_locations (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  assignment_id BIGINT UNSIGNED NOT NULL,
+  assignment_id INT UNSIGNED NOT NULL,
   driver_id INT UNSIGNED NOT NULL,
   latitude DECIMAL(10,7) NOT NULL,
   longitude DECIMAL(10,7) NOT NULL,
@@ -265,7 +166,7 @@ CREATE TABLE IF NOT EXISTS app_driver_locations (
   PRIMARY KEY (id),
   KEY idx_app_driver_location_assignment_time (assignment_id,recorded_at),
   KEY idx_app_driver_location_driver_time (driver_id,recorded_at),
-  CONSTRAINT fk_app_driver_location_assignment FOREIGN KEY (assignment_id) REFERENCES app_driver_assignments(id) ON DELETE CASCADE,
+  CONSTRAINT fk_app_driver_location_assignment FOREIGN KEY (assignment_id) REFERENCES reservation_drivers(id) ON DELETE CASCADE,
   CONSTRAINT fk_app_driver_location_driver FOREIGN KEY (driver_id) REFERENCES drivers(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -292,7 +193,7 @@ CREATE TABLE IF NOT EXISTS app_documents (
 
 CREATE TABLE IF NOT EXISTS app_driver_expenses (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  assignment_id BIGINT UNSIGNED NOT NULL,
+  assignment_id INT UNSIGNED NOT NULL,
   reservation_id INT UNSIGNED NOT NULL,
   driver_id INT UNSIGNED NOT NULL,
   category VARCHAR(40) NOT NULL,
@@ -310,7 +211,7 @@ CREATE TABLE IF NOT EXISTS app_driver_expenses (
   PRIMARY KEY (id),
   KEY idx_app_driver_expense_driver (driver_id,incurred_at),
   KEY idx_app_driver_expense_reservation (reservation_id,status),
-  CONSTRAINT fk_app_driver_expense_assignment FOREIGN KEY (assignment_id) REFERENCES app_driver_assignments(id),
+  CONSTRAINT fk_app_driver_expense_assignment FOREIGN KEY (assignment_id) REFERENCES reservation_drivers(id),
   CONSTRAINT fk_app_driver_expense_reservation FOREIGN KEY (reservation_id) REFERENCES reservations(id),
   CONSTRAINT fk_app_driver_expense_driver FOREIGN KEY (driver_id) REFERENCES drivers(id),
   CONSTRAINT fk_app_driver_expense_document FOREIGN KEY (document_id) REFERENCES app_documents(id),
@@ -319,7 +220,7 @@ CREATE TABLE IF NOT EXISTS app_driver_expenses (
 
 CREATE TABLE IF NOT EXISTS app_incidents (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  assignment_id BIGINT UNSIGNED NULL,
+  assignment_id INT UNSIGNED NULL,
   reservation_id INT UNSIGNED NOT NULL,
   reported_by_user_id INT UNSIGNED NOT NULL,
   type VARCHAR(40) NOT NULL,
@@ -338,7 +239,7 @@ CREATE TABLE IF NOT EXISTS app_incidents (
   PRIMARY KEY (id),
   KEY idx_app_incident_reservation (reservation_id,status),
   KEY idx_app_incident_assignment (assignment_id),
-  CONSTRAINT fk_app_incident_assignment FOREIGN KEY (assignment_id) REFERENCES app_driver_assignments(id),
+  CONSTRAINT fk_app_incident_assignment FOREIGN KEY (assignment_id) REFERENCES reservation_drivers(id),
   CONSTRAINT fk_app_incident_reservation FOREIGN KEY (reservation_id) REFERENCES reservations(id),
   CONSTRAINT fk_app_incident_reporter FOREIGN KEY (reported_by_user_id) REFERENCES users(id),
   CONSTRAINT fk_app_incident_resolver FOREIGN KEY (resolved_by_user_id) REFERENCES users(id)
@@ -440,22 +341,6 @@ CREATE TABLE IF NOT EXISTS app_conversation_participants (
   CONSTRAINT fk_app_conversation_participant_user FOREIGN KEY (user_id) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE IF NOT EXISTS app_messages (
-  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  conversation_id BIGINT UNSIGNED NOT NULL,
-  sender_user_id INT UNSIGNED NOT NULL,
-  message_type ENUM('TEXT','DOCUMENT') NOT NULL DEFAULT 'TEXT',
-  body TEXT NULL,
-  document_id BIGINT UNSIGNED NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  deleted_at TIMESTAMP NULL,
-  PRIMARY KEY (id),
-  KEY idx_app_messages_conversation (conversation_id,created_at),
-  CONSTRAINT fk_app_message_conversation FOREIGN KEY (conversation_id) REFERENCES app_conversations(id) ON DELETE CASCADE,
-  CONSTRAINT fk_app_message_sender FOREIGN KEY (sender_user_id) REFERENCES users(id),
-  CONSTRAINT fk_app_message_document FOREIGN KEY (document_id) REFERENCES app_documents(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 CREATE TABLE IF NOT EXISTS app_masked_calls (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   reservation_id INT UNSIGNED NOT NULL,
@@ -470,20 +355,6 @@ CREATE TABLE IF NOT EXISTS app_masked_calls (
   KEY idx_app_masked_call_reservation (reservation_id,created_at),
   CONSTRAINT fk_app_masked_call_reservation FOREIGN KEY (reservation_id) REFERENCES reservations(id),
   CONSTRAINT fk_app_masked_call_initiator FOREIGN KEY (initiator_user_id) REFERENCES users(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS app_notifications (
-  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  user_id INT UNSIGNED NOT NULL,
-  type VARCHAR(50) NOT NULL,
-  title VARCHAR(191) NOT NULL,
-  body TEXT NOT NULL,
-  data JSON NULL,
-  read_at TIMESTAMP NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (id),
-  KEY idx_app_notification_user (user_id,read_at,created_at),
-  CONSTRAINT fk_app_notification_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS app_idempotency_keys (
@@ -543,3 +414,107 @@ CREATE TABLE IF NOT EXISTS app_concierge_requests (
   CONSTRAINT fk_app_concierge_agency FOREIGN KEY (agency_id) REFERENCES agencies(id),
   CONSTRAINT fk_app_concierge_creator FOREIGN KEY (created_by_user_id) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Read-only compatibility projections over the existing production business tables.
+-- Mobile writes target the actual legacy tables directly; these names are VIEWS,
+-- not duplicate stores. Existing route SQL can keep its response aliases.
+
+CREATE ALGORITHM=MERGE VIEW app_reservation_meta AS
+SELECT r.id AS reservation_id,
+       COALESCE(r.service_code,CASE r.service_type WHEN 1 THEN 'CHAUFFEUR'
+         WHEN 2 THEN 'CAR_RENTAL' WHEN 3 THEN 'TRANSFER' ELSE NULL END) AS service_code,
+       COALESCE(r.source_channel,'BACK_OFFICE') AS source_channel,
+       COALESCE(r.created_by_user_id,r.user_id) AS created_by_user_id,
+       r.created_by_agent_id,
+       CASE WHEN r.status=3 THEN 'CANCELLED'
+            WHEN r.status=2 THEN 'COMPLETED'
+            WHEN r.lifecycle_status IS NOT NULL THEN r.lifecycle_status
+            WHEN r.status=1 THEN 'CONFIRMED' ELSE 'PENDING' END AS lifecycle_status,
+       COALESCE(r.currency_code,CASE WHEN r.currency='CHF' THEN 'CHF' ELSE 'EUR' END) AS currency_code,
+       r.quote_snapshot_id,r.created_at,r.updated_at
+  FROM reservations r;
+
+CREATE VIEW app_reservation_leg_meta AS
+SELECT rd.id,rd.reservation_id,rd.id AS reservation_details_id,
+       COALESCE(rd.sequence_no,rd.id) AS sequence_no,
+       COALESCE(rd.vehicle_class_id,
+          (SELECT v.vehicle_class_id FROM reservation_vehicles rv
+            JOIN vehicles v ON v.id=rv.vehicle_id
+           WHERE rv.reservation_details_id=rd.id AND rv.deleted_at IS NULL
+           ORDER BY rv.id DESC LIMIT 1)) AS vehicle_class_id,
+       rd.passenger_count,rd.luggage_count,
+       COALESCE(rd.pickup_details,JSON_OBJECT('address',rd.pick_up_location,
+         'countryId',rd.pick_up_country_id,'cityId',rd.pick_up_city_id)) AS pickup_details,
+       COALESCE(rd.dropoff_details,JSON_OBJECT('address',rd.drop_off_location,
+         'countryId',rd.drop_off_country_id,'cityId',rd.drop_off_city_id)) AS dropoff_details,
+       COALESCE(rd.flight_number,
+          (SELECT rf.flight_number FROM reservation_flight_numbers rf
+            WHERE rf.reservation_details_id=rd.id ORDER BY rf.id DESC LIMIT 1)) AS flight_number,
+       COALESCE(rd.app_leg_status,'PENDING') AS status,
+       rd.created_at,rd.updated_at
+  FROM reservation_details rd;
+
+CREATE VIEW app_driver_assignments AS
+SELECT rdv.id,rdv.reservation_id,rdv.reservation_details_id,
+       rdv.id AS legacy_reservation_driver_id,
+       COALESCE(rdv.pick_up_driver_id,rdv.drop_off_driver_id) AS driver_id,
+       CASE WHEN rdv.status=2 THEN 'CANCELLED'
+            WHEN r.status=3 THEN 'CANCELLED'
+            WHEN r.status=2 THEN 'COMPLETED'
+            ELSE COALESCE(rdv.app_assignment_status,'OFFERED') END AS status,
+       COALESCE(rdv.scheduled_start_at,TIMESTAMP(rdv.pick_up_date,rdv.pick_up_time),
+         TIMESTAMP(d.pick_up_date,d.pick_up_time)) AS scheduled_start_at,
+       COALESCE(rdv.scheduled_end_at,TIMESTAMP(rdv.drop_off_date,rdv.drop_off_time),
+         TIMESTAMP(d.drop_off_date,d.drop_off_time)) AS scheduled_end_at,
+       rdv.acknowledged_at,rdv.declined_at,rdv.decline_reason,
+       rdv.started_at,rdv.completed_at,
+       COALESCE(rdv.assigned_by_user_id,rdv.user_id) AS assigned_by_user_id,
+       rdv.created_at,rdv.updated_at
+  FROM reservation_drivers rdv
+  JOIN reservation_details d ON d.id=rdv.reservation_details_id
+  JOIN reservations r ON r.id=rdv.reservation_id
+ WHERE rdv.deleted_at IS NULL;
+
+-- The original website reservation_messages table owns message rows.
+CREATE VIEW app_messages AS
+SELECT m.id,c.id AS conversation_id,m.sender_id AS sender_user_id,
+       m.message_type,m.body,m.document_id,m.created_at,m.deleted_at
+  FROM reservation_messages m
+  JOIN app_conversations c ON c.reservation_id=m.reservation_id;
+
+-- Preserve the numeric mobile notification IDs without changing the website UUID PK.
+CREATE VIEW app_notifications AS
+SELECT n.app_mobile_id AS id,n.notifiable_id AS user_id,
+       COALESCE(n.app_type,n.type) AS type,
+       COALESCE(n.app_title,IF(JSON_VALID(n.data),JSON_UNQUOTE(JSON_EXTRACT(n.data,'$.title')),NULL),'Notification') AS title,
+       COALESCE(n.app_body,IF(JSON_VALID(n.data),JSON_UNQUOTE(JSON_EXTRACT(n.data,'$.message')),NULL),'') AS body,
+       n.data,n.read_at,n.created_at
+  FROM notifications n
+ WHERE n.notifiable_type='App\\Models\\User' OR n.app_type IS NOT NULL;
+
+-- Service mapping is a read-only projection. Website services remain
+-- authoritative for descriptions, and numeric booking service_type is 1/2/3.
+CREATE VIEW app_service_catalog AS
+SELECT 'CHAUFFEUR' AS code,'Chauffeur Service' AS title,
+       COALESCE((SELECT NULLIF(description_en,'') FROM services WHERE id=8),
+                'Hourly and daily chauffeur service') AS description,
+       (SELECT image FROM services WHERE id=8) AS icon_url,
+       'INSTANT' AS booking_mode,1 AS legacy_service_id,1 AS is_active,10 AS display_order
+UNION ALL
+SELECT 'TRANSFER','Transfer',
+       COALESCE((SELECT NULLIF(description_en,'') FROM services WHERE id=7),
+                'Airport and point-to-point transfers'),
+       (SELECT image FROM services WHERE id=7),'INSTANT',3,1,20
+UNION ALL
+SELECT 'CAR_RENTAL','Car Rental',
+       COALESCE((SELECT NULLIF(description_en,'') FROM services WHERE id=10),
+                'Luxury self-drive rental'),
+       (SELECT image FROM services WHERE id=10),'INSTANT',2,1,30
+UNION ALL
+SELECT 'AIRPORT_VIP','Airport VIP',
+       'Airport VIP assistance submitted for manual confirmation',NULL,
+       'MANUAL_REQUEST',NULL,1,40
+UNION ALL
+SELECT 'CONCIERGE','Concierge',
+       'Bespoke concierge request submitted to the concierge team',NULL,
+       'MANUAL_REQUEST',NULL,1,50;

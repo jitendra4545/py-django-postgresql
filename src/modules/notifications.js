@@ -125,7 +125,7 @@ router.post(
   validate(z.object({ id: z.coerce.number().int().positive() }), 'params'),
   asyncHandler(async (request, response) => {
     await query(
-      'UPDATE app_notifications SET read_at=COALESCE(read_at,NOW()) WHERE id=? AND user_id=?',
+      `UPDATE notifications SET read_at=COALESCE(read_at,NOW()) WHERE app_mobile_id=? AND notifiable_id=? AND (notifiable_type=CONCAT('App',CHAR(92),'Models',CHAR(92),'User') OR app_type IS NOT NULL)`,
       [request.params.id, request.auth.userId],
     );
     response.status(204).end();
@@ -135,7 +135,7 @@ router.post(
 router.post(
   '/read-all',
   asyncHandler(async (request, response) => {
-    await query('UPDATE app_notifications SET read_at=COALESCE(read_at,NOW()) WHERE user_id=?', [
+    await query(`UPDATE notifications SET read_at=COALESCE(read_at,NOW()) WHERE notifiable_id=? AND (notifiable_type=CONCAT('App',CHAR(92),'Models',CHAR(92),'User') OR app_type IS NOT NULL)`, [
       request.auth.userId,
     ]);
     response.status(204).end();

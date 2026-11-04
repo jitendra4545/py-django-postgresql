@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { toUtcSqlDateTime } from '../common/utc-sql-datetime.js';
 import { z } from 'zod';
 import { asyncHandler } from '../common/async-handler.js';
 import { requireAuth, requireRoles } from '../common/auth.js';
@@ -13,6 +14,7 @@ import { updateProfileTable } from '../services/profile-updates.js';
 import { emitToUser } from '../services/realtime.js';
 import { env } from '../config/env.js';
 import { locationIntervalDecision } from '../services/tracking.js';
+import { writeLegacyDriverStatus } from '../services/legacy-trip-status.js';
 
 const router = Router();
 router.use(requireAuth, requireRoles(ROLES.CHAUFFEUR));
@@ -141,7 +143,7 @@ router.post(
     const changed = assertAssignmentTransition(assignment.status, 'ACKNOWLEDGED');
     if (changed) {
       await query(
-        `UPDATE app_driver_assignments SET status='ACKNOWLEDGED',acknowledged_at=NOW(),updated_at=NOW() WHERE id=?`,
+        `UPDATE reservation_drivers SET app_assignment_status='ACKNOWLEDGED',acknowledged_at=NOW(),updated_at=NOW() WHERE id=?`,
         [assignment.id],
       );
       await query(
@@ -165,7 +167,7 @@ router.post(
     const assignment = await assignmentFor(request.auth, request.params.assignmentId);
     assertAssignmentTransition(assignment.status, 'DECLINED');
     await query(
-      `UPDATE app_driver_assignments SET status='DECLINED',declined_at=NOW(),decline_reason=?,updated_at=NOW() WHERE id=?`,
+      `UPDATE reservation_drivers SET app_assignment_status='DECLINED',status=2,declined_at=NOW(),decline_reason=?,updated_at=NOW() WHERE id=?`,
       [request.body.reason, assignment.id],
     );
     await query(
@@ -201,7 +203,7 @@ router.post(
       note: z.string().max(1000).optional(),
       latitude: z.number().min(-90).max(90).optional(),
       longitude: z.number().min(-180).max(180).optional(),
-      occurredAt: z.string().datetime().optional(),
+      occurredAt: z.string().datetime({ offset: true }).optional(),
     }),
   ),
   asyncHandler(async (request, response) => {
@@ -214,13 +216,13 @@ router.post(
       );
       const changed = assertAssignmentTransition(assignment.status, request.body.status);
       if (!changed) return { ...assignment, notificationChanged: false };
-      const occurredAt = request.body.occurredAt?.slice(0, 19).replace('T', ' ') ?? null;
+      const occurredAt = (request.body.occurredAt ? toUtcSqlDateTime(request.body.occurredAt) : null);
       await connection.execute(
-        `UPDATE app_driver_assignments SET status=?,started_at=IF(?='ON_THE_WAY',COALESCE(started_at,NOW()),started_at),completed_at=IF(?='COMPLETED',NOW(),completed_at),updated_at=NOW() WHERE id=?`,
+        `UPDATE reservation_drivers SET app_assignment_status=?,started_at=IF(?='ON_THE_WAY',COALESCE(started_at,NOW()),started_at),completed_at=IF(?='COMPLETED',NOW(),completed_at),updated_at=NOW() WHERE id=?`,
         [request.body.status, request.body.status, request.body.status, assignment.id],
       );
       await connection.execute(
-        `UPDATE app_reservation_leg_meta SET status=?,updated_at=NOW() WHERE reservation_details_id=?`,
+        `UPDATE reservation_details SET app_leg_status=?,updated_at=NOW() WHERE id=?`,
         [request.body.status, assignment.reservation_details_id],
       );
       await connection.execute(
@@ -237,6 +239,15 @@ router.post(
           occurredAt,
         ],
       );
+      // Also write a website-visible status event using existing legacy tables.
+      await writeLegacyDriverStatus(connection, {
+        reservationId: assignment.reservation_id,
+        reservationDetailsId: assignment.reservation_details_id,
+        driverId: request.auth.driverId,
+        status: request.body.status,
+        note: request.body.note ?? null,
+        userId: request.auth.userId,
+      });
       const [activeRows] = await connection.execute(
         `SELECT COUNT(*) AS total FROM app_driver_assignments WHERE reservation_id=? AND status NOT IN ('COMPLETED','NO_SHOW','DECLINED','CANCELLED')`,
         [assignment.reservation_id],
@@ -246,7 +257,7 @@ router.post(
           ? 'COMPLETED'
           : request.body.status;
       await connection.execute(
-        `UPDATE app_reservation_meta SET lifecycle_status=?,updated_at=NOW() WHERE reservation_id=?`,
+        `UPDATE reservations SET lifecycle_status=?,updated_at=NOW() WHERE id=?`,
         [reservationStatus, assignment.reservation_id],
       );
       if (reservationStatus === 'COMPLETED')
@@ -285,7 +296,7 @@ router.post(
       heading: z.number().min(0).max(360).optional(),
       speed: z.number().nonnegative().max(400).optional(),
       accuracy: z.number().nonnegative().max(5000).optional(),
-      recordedAt: z.string().datetime(),
+      recordedAt: z.string().datetime({ offset: true }),
     }),
   ),
   asyncHandler(async (request, response) => {
@@ -338,7 +349,7 @@ router.post(
           request.body.heading ?? null,
           request.body.speed ?? null,
           request.body.accuracy ?? null,
-          request.body.recordedAt.slice(0, 19).replace('T', ' '),
+          toUtcSqlDateTime(request.body.recordedAt),
         ],
       );
       return lockedAssignment;
@@ -378,7 +389,7 @@ router.post(
       currency: z.string().length(3).default('EUR'),
       description: z.string().max(1000).optional(),
       documentId: z.number().int().positive().optional(),
-      incurredAt: z.string().datetime(),
+      incurredAt: z.string().datetime({ offset: true }),
     }),
   ),
   asyncHandler(async (request, response) => {
@@ -394,7 +405,7 @@ router.post(
         request.body.currency,
         request.body.description ?? null,
         request.body.documentId ?? null,
-        request.body.incurredAt.slice(0, 19).replace('T', ' '),
+        toUtcSqlDateTime(request.body.incurredAt),
       ],
     );
     response.status(201).json({ id: result.insertId, status: 'SUBMITTED' });

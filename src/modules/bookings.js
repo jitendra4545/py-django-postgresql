@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { toUtcSqlDateTime } from '../common/utc-sql-datetime.js';
 import { z } from 'zod';
 import { asyncHandler } from '../common/async-handler.js';
 import { requireAuth, requireRoles } from '../common/auth.js';
@@ -59,8 +60,8 @@ const locationSchema = z.object({
   city: z.string().max(191).optional(),
 });
 const legSchema = z.object({
-  startAt: z.string().datetime(),
-  endAt: z.string().datetime().optional(),
+  startAt: z.string().datetime({ offset: true }),
+  endAt: z.string().datetime({ offset: true }).optional(),
   pickup: locationSchema,
   dropoff: locationSchema.optional(),
   stops: z.array(locationSchema).max(10).default([]),
@@ -104,8 +105,8 @@ const bookingChangeSchema = z
       .array(
         z.object({
           detailId: z.number().int().positive(),
-          startAt: z.string().datetime().optional(),
-          endAt: z.string().datetime().optional(),
+          startAt: z.string().datetime({ offset: true }).optional(),
+          endAt: z.string().datetime({ offset: true }).optional(),
           pickup: locationSchema.partial().optional(),
           dropoff: locationSchema.partial().nullable().optional(),
           stops: z.array(locationSchema).max(10).optional(),
@@ -400,7 +401,7 @@ router.post(
         ],
       );
       await connection.execute(
-        `UPDATE app_reservation_meta SET lifecycle_status='CHANGE_REQUESTED',updated_at=NOW() WHERE reservation_id=?`,
+        `UPDATE reservations SET lifecycle_status='CHANGE_REQUESTED',updated_at=NOW() WHERE id=?`,
         [request.params.reservationId],
       );
       await connection.execute(
@@ -439,7 +440,7 @@ router.post(
         ],
       );
       await connection.execute(
-        `UPDATE app_reservation_meta SET lifecycle_status='CANCELLATION_REQUESTED',updated_at=NOW() WHERE reservation_id=?`,
+        `UPDATE reservations SET lifecycle_status='CANCELLATION_REQUESTED',updated_at=NOW() WHERE id=?`,
         [request.params.reservationId],
       );
       await connection.execute(
@@ -459,7 +460,7 @@ router.post(
       customerId: z.number().int().positive().optional(),
       airport: z.string().min(2),
       terminal: z.string().optional(),
-      serviceAt: z.string().datetime(),
+      serviceAt: z.string().datetime({ offset: true }),
       passengerCount: z.number().int().positive(),
       flightNumber: z.string().optional(),
       requestText: z.string().max(3000).optional(),
@@ -478,7 +479,7 @@ router.post(
         request.auth.userId,
         request.body.airport,
         request.body.terminal ?? null,
-        request.body.serviceAt.slice(0, 19).replace('T', ' '),
+        toUtcSqlDateTime(request.body.serviceAt),
         request.body.passengerCount,
         request.body.flightNumber ?? null,
         request.body.requestText ?? null,
@@ -517,7 +518,7 @@ router.post(
     z.object({
       customerId: z.number().int().positive().optional(),
       category: z.string().min(2).max(100),
-      requestedFor: z.string().datetime().optional(),
+      requestedFor: z.string().datetime({ offset: true }).optional(),
       city: z.string().max(191).optional(),
       requestText: z.string().min(10).max(5000),
     }),
@@ -534,7 +535,7 @@ router.post(
         request.auth.agencyId ?? null,
         request.auth.userId,
         request.body.category,
-        request.body.requestedFor?.slice(0, 19).replace('T', ' ') ?? null,
+        (request.body.requestedFor ? toUtcSqlDateTime(request.body.requestedFor) : null),
         request.body.city ?? null,
         request.body.requestText,
       ],

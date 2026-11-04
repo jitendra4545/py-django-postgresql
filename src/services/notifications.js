@@ -6,10 +6,11 @@ import { emitToUser } from './realtime.js';
 export const notifyUser = async ({ userId, type, title, body, data = {} }, connection = null) => {
   const persist = async (executor) => {
     const [result] = await executor.execute(
-      `INSERT INTO app_notifications
-        (user_id, type, title, body, data, created_at)
-       VALUES (?, ?, ?, ?, ?, NOW())`,
-      [userId, type, title, body, JSON.stringify(data)],
+      `INSERT INTO notifications
+        (id,type,notifiable_type,notifiable_id,data,app_type,app_title,app_body,created_at,updated_at)
+       VALUES (UUID(),'AppMobileNotification',CONCAT('App',CHAR(92),'Models',CHAR(92),'User'),
+               ?,?,?,?,?,NOW(),NOW())`,
+      [userId, JSON.stringify(data), type, title, body],
     );
     await executor.execute(
       `INSERT INTO app_push_delivery_jobs
