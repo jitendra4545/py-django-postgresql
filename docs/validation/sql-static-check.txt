@@ -1,0 +1,2 @@
+PASS: 356 literal SQL calls have matching parameter counts.
+PASS: 9 static migration INSERT SELECT statements have matching column counts.

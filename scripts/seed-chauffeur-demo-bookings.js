@@ -11,7 +11,7 @@ import { pool, query } from '../src/db/pool.js';
  *   GET /operations/chauffeurs/available
  *
  * Older backend packages do not expose that route. Instead, it checks
- * app_driver_assignments directly before creating any booking.
+ * dl_mobile_driver_assignments directly before creating any booking.
  *
  * Required .env values:
  *   API_BASE_URL=http://localhost:3000
@@ -269,7 +269,7 @@ async function driverHasConflict(startAt, endAt) {
   const rows = await query(
     `SELECT id, status, scheduled_start_at AS scheduledStartAt,
             scheduled_end_at AS scheduledEndAt
-       FROM app_driver_assignments
+       FROM dl_mobile_driver_assignments
       WHERE driver_id=?
         AND status NOT IN ('DECLINED','COMPLETED','NO_SHOW','CANCELLED')
         AND scheduled_start_at < ?

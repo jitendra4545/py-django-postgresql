@@ -1,3 +1,5 @@
+import { pool } from './db/pool.js';
+import { assertSharedStorageReady } from './db/shared-schema.js';
 import http from 'node:http';
 import { setInterval, clearInterval } from 'node:timers';
 import { Server } from 'socket.io';
@@ -7,6 +9,10 @@ import { registerSocketServer } from './services/realtime.js';
 import { sweepExpiredPaymentHolds } from './services/payment-holds.js';
 import { checkPushReceipts, processPushJobs } from './services/notification-worker.js';
 import { startApiAuditLogWriter, stopApiAuditLogWriter } from './services/api-audit-log.js';
+
+// Fail before accepting traffic or starting workers when the shared migration
+// is absent. Serving partially migrated data would risk inconsistent bookings.
+await assertSharedStorageReady(pool);
 
 const server = http.createServer(app);
 const io = new Server(server, {

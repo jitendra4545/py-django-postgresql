@@ -32,7 +32,7 @@ export const loadTrackingView = async (reservationId) => {
     `SELECT ada.id,ada.reservation_details_id AS reservationDetailsId,ada.status,
             ada.scheduled_start_at AS scheduledStartAt,ada.scheduled_end_at AS scheduledEndAt,
             d.full_name AS chauffeurName,d.photo AS chauffeurPhoto
-       FROM app_driver_assignments ada
+       FROM dl_mobile_driver_assignments ada
        JOIN drivers d ON d.id=ada.driver_id
       WHERE ada.reservation_id=? AND ada.status NOT IN ('DECLINED','CANCELLED')
       ORDER BY ada.scheduled_start_at,ada.id`,
@@ -41,8 +41,11 @@ export const loadTrackingView = async (reservationId) => {
 
   for (const assignment of assignments) {
     assignment.location = await one(
-      `SELECT latitude,longitude,heading,speed,accuracy,recorded_at AS recordedAt
-         FROM app_driver_locations WHERE assignment_id=? ORDER BY recorded_at DESC LIMIT 1`,
+      `SELECT location.latitude,location.longitude,location.heading,location.speed,location.accuracy,location.recorded_at AS recordedAt
+         FROM app_driver_locations location
+         JOIN dl_mobile_driver_assignments current_assignment
+           ON current_assignment.id=location.assignment_id AND current_assignment.driver_id=location.driver_id
+        WHERE location.assignment_id=? ORDER BY location.recorded_at DESC LIMIT 1`,
       [assignment.id],
     );
     assignment.locationIsStale = isLocationStale(assignment.location?.recordedAt);

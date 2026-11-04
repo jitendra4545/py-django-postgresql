@@ -1,6 +1,6 @@
 {
   "name": "drive-luxury-backend-r1",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "private": true,
   "description": "Drive Luxury Release 1 API for Client, Agency Agent and Chauffeur applications",
   "type": "module",
@@ -16,8 +16,6 @@
     "audit:prune": "node src/scripts/prune-api-audit.js",
     "audit:selftest": "node --test scripts/selftest-api-audit.mjs",
     "verify:schema": "node src/scripts/verify-legacy-schema.js",
-    "verify:legacy-first": "node src/scripts/verify-legacy-first-schema.js",
-    "legacy-first:selftest": "node scripts/selftest-legacy-first.mjs",
     "syntax:check": "node scripts/check-syntax.js && node scripts/check-openapi.js",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -32,8 +30,11 @@
     "telnyx:check": "node scripts/check-telnyx-integration.js",
     "pricing:selftest": "node scripts/selftest-pricing-parity.mjs",
     "pricing:integration-selftest": "node scripts/selftest-pricing-integration.mjs",
-    "compat:selftest": "node --test tests/legacy-first-compatibility.node.test.mjs",
-    "db:preflight": "node src/scripts/preflight-legacy-database.js"
+    "db:consolidation:plan": "node src/scripts/shared-storage.js plan",
+    "db:consolidation:verify": "node src/scripts/shared-storage.js verify",
+    "db:consolidation:archive": "node src/scripts/shared-storage.js archive",
+    "consolidation:selftest": "node --test tests/shared-storage.unit.node.mjs tests/consolidation-contract.node.mjs",
+    "consolidation:integration": "node scripts/test-shared-database.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.891.0",

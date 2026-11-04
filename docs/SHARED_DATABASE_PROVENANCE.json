@@ -1,0 +1,16 @@
+{
+  "backend_input": "drive-luxury-backend-pricing-aligned-2026-11-03(3).zip",
+  "backend_input_sha256": "1b17906edf8f7cfdd3e33d9dd924d2b8f3313b0ed33f894f0e946a07bf8b61ee",
+  "schema_input": "o56gps_reza_drive_luxury(3).sql",
+  "schema_input_sha256": "a175fbfe18189e79a1ceab10c06d04bec53dbfbf3faa5d65d3699e9c93e8812e",
+  "schema_table_count": 165,
+  "schema_contains_inserted_rows": false,
+  "release": "2.4.0",
+  "date": "2026-11-04",
+  "live_database_modified": false,
+  "frontend_modified": false,
+  "runtime_consolidated_stores": 8,
+  "read_adapter_views": 7,
+  "retained_app_tables": 27,
+  "database_integration_executed": false
+}

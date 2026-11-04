@@ -6,75 +6,68 @@ The API continues to print Morgan logs to the console, for example:
 GET /api/v1/notifications/unread-count 304 1679.043 ms
 ```
 
-With audit logging enabled, it also stores a **redacted diagnostic record** in `app_api_request_logs`, including method, path, status, duration in milliseconds, query parameters, request JSON, response JSON, authenticated user ID/role (if available), request ID, client IP, user-agent, response content type, and error code.
+With audit logging enabled, it also stores a **redacted diagnostic record** in `route_access_logs`, including method, path, status, duration in milliseconds, query parameters, request JSON, response JSON, authenticated user ID/role (if available), request ID, client IP, user-agent, response content type, and error code.
 
-A `304 Not Modified` has **no HTTP response body**, so `response_body` is stored as `NULL` even if Express generated a JSON representation internally. A prematurely disconnected client is recorded with diagnostic status `499` and `CLIENT_DISCONNECTED` (this is an internal audit value, not an HTTP response sent by Express). A GET normally has no request body. Console log timing and the DB's duration may differ slightly because they are recorded by separate middleware.
+A `304 Not Modified` has **no HTTP response body**, so `mobile_response_body` is stored as `NULL` even if Express generated a JSON representation internally. A prematurely disconnected client is recorded with diagnostic status `499` and `CLIENT_DISCONNECTED` (this is an internal audit value, not an HTTP response sent by Express). A GET normally has no request body. Console log timing and the DB's duration may differ slightly because they are recorded by separate middleware.
 
-## Setup (do this before enabling logging)
+## Setup (release 2.4.0)
 
-1. **Back up the target MySQL database**, particularly if it is the client's existing production database.
-2. Add the new table, without changing any old migration file:
+Apply the shared database migration using the root `START_HERE_SHARED_DATABASE.md` guide first. Migration 008 moves old audit rows into the existing client `route_access_logs` table. `npm run audit:setup` now verifies shared-schema readiness; it does not recreate an obsolete app audit table or bypass checksum conflicts.
 
-   ```bash
-   npm run audit:setup
-   ```
+Keep the existing backend settings:
 
-   This applies ONLY `migrations/007_api_request_audit_logs.sql`. If `app_schema_migrations` already exists, the script records that file's exact checksum without editing earlier migration entries. It verifies all expected columns. If the table/history is incompatible, it stops. You may instead execute this new SQL file against the intended database using MySQL Workbench.
+```dotenv
+API_AUDIT_LOG_ENABLED=true
+API_AUDIT_LOG_MAX_BODY_BYTES=8192
+API_AUDIT_LOG_MAX_QUEUE=2000
+API_AUDIT_LOG_BATCH_SIZE=50
+API_AUDIT_LOG_FLUSH_MS=1000
+API_AUDIT_LOG_RETENTION_DAYS=14
+```
 
-3. Set the following in the backend (not React Native) `.env` or hosting environment:
-
-   ```dotenv
-   API_AUDIT_LOG_ENABLED=true
-   API_AUDIT_LOG_MAX_BODY_BYTES=8192
-   API_AUDIT_LOG_MAX_QUEUE=2000
-   API_AUDIT_LOG_BATCH_SIZE=50
-   API_AUDIT_LOG_FLUSH_MS=1000
-   API_AUDIT_LOG_RETENTION_DAYS=14
-   ```
-
-4. Restart the backend (`npm start`). Send a normal API request, then query the database after ~1–2 seconds.
-
-**Prior migration issue:** The project's normal `npm run migrate` verifies the SHA-256 checksum of every earlier migration. If your existing DB previously applied a different version of `001_release_1_mobile_foundation.sql`, `npm run migrate` may still stop with `Applied migration changed`. **Never overwrite the historical checksum simply to make it pass.** `npm run audit:setup` installs *only* this new HTTP audit table and does not bypass that older mismatch; reconcile existing production migrations independently.
+Restart only after schema verification. Stored request/response content remains redacted. Both automated retention and `audit:prune` delete only mobile-origin rows, not the client's other access logs. The eight source app tables are inactive migration snapshots.
 
 ## Example MySQL queries
 
 Latest 20 requests:
 
 ```sql
-SELECT id, created_at, access_line, actor_user_id, client_ip, error_code
-FROM app_api_request_logs
+SELECT id, created_at, mobile_access_line, mobile_actor_user_id, ip_address, mobile_error_code
+FROM route_access_logs
+WHERE mobile_source='MOBILE_API'
 ORDER BY id DESC LIMIT 20;
 ```
 
 Full request and response data:
 
 ```sql
-SELECT created_at, request_id, method, request_path, http_status, duration_ms,
-       request_query, request_body, response_body, actor_user_id, actor_role,
-       client_ip, response_content_type, response_bytes, error_code
-FROM app_api_request_logs
+SELECT created_at, mobile_request_id, method, mobile_request_path, status_code, mobile_duration_ms,
+       query_params, request_body, mobile_response_body, mobile_actor_user_id, mobile_actor_role,
+       ip_address, mobile_response_content_type, mobile_response_bytes, mobile_error_code
+FROM route_access_logs
+WHERE mobile_source='MOBILE_API'
 ORDER BY id DESC LIMIT 20;
 ```
 
 Errors for the past day:
 
 ```sql
-SELECT created_at, access_line, request_body, response_body, error_code
-FROM app_api_request_logs
-WHERE http_status >= 400 AND created_at >= NOW() - INTERVAL 1 DAY
+SELECT created_at, mobile_access_line, request_body, mobile_response_body, mobile_error_code
+FROM route_access_logs
+WHERE mobile_source='MOBILE_API' AND status_code >= 400 AND created_at >= NOW() - INTERVAL 1 DAY
 ORDER BY id DESC LIMIT 50;
 ```
 
 Logs for a specific API:
 
 ```sql
-SELECT created_at, access_line, request_query, request_body, response_body
-FROM app_api_request_logs
-WHERE request_path = '/api/v1/notifications/unread-count'
+SELECT created_at, mobile_access_line, query_params, request_body, mobile_response_body
+FROM route_access_logs
+WHERE mobile_source='MOBILE_API' AND mobile_request_path = '/api/v1/notifications/unread-count'
 ORDER BY id DESC LIMIT 50;
 ```
 
-Correlate a frontend report to the API call by reading the `X-Request-ID` response header and then searching `request_id`.
+Correlate a frontend report to the API call by reading the `X-Request-ID` response header and then searching `mobile_request_id`.
 
 ## Security and behavior
 
@@ -94,4 +87,4 @@ npm run audit:selftest
 npm run syntax:check
 ```
 
-The audit self-test runs without a live MySQL connection; successful MySQL logging must still be verified on the staging/production database after applying migration 007.
+The audit self-test runs without a live MySQL connection; successful MySQL logging must still be verified on the staging/production database after applying migration 008.

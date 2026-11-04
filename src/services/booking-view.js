@@ -9,7 +9,7 @@ export const loadBookingView = async (reservationId) => {
             arm.lifecycle_status AS status, arm.source_channel AS sourceChannel,
             arm.created_by_agent_id AS createdByAgentId, arm.currency_code AS currency
        FROM reservations r
-       JOIN app_reservation_meta arm ON arm.reservation_id = r.id
+       JOIN dl_mobile_reservation_meta arm ON arm.reservation_id = r.id
       WHERE r.id = ? AND r.deleted_at IS NULL`,
     [reservationId],
   );
@@ -19,13 +19,14 @@ export const loadBookingView = async (reservationId) => {
     query(
       `SELECT rd.id, rd.pick_up_date AS pickupDate, rd.pick_up_time AS pickupTime,
               rd.drop_off_date AS dropoffDate, rd.drop_off_time AS dropoffTime,
-              rd.pick_up_location AS pickupAddress, rd.drop_off_location AS dropoffAddress,
+              COALESCE(JSON_UNQUOTE(JSON_EXTRACT(rlm.pickup_details,'$.address')),rd.pick_up_location) AS pickupAddress,
+              COALESCE(JSON_UNQUOTE(JSON_EXTRACT(rlm.dropoff_details,'$.address')),rd.drop_off_location) AS dropoffAddress,
               rlm.sequence_no AS sequenceNo, rlm.vehicle_class_id AS vehicleClassId,
               rlm.passenger_count AS passengerCount, rlm.luggage_count AS luggageCount,
               rlm.pickup_details AS pickupDetails, rlm.dropoff_details AS dropoffDetails,
               rlm.flight_number AS flightNumber, rlm.status
          FROM reservation_details rd
-         JOIN app_reservation_leg_meta rlm ON rlm.reservation_details_id = rd.id
+         JOIN dl_mobile_reservation_leg_meta rlm ON rlm.reservation_details_id = rd.id
         WHERE rd.reservation_id = ? AND rd.deleted_at IS NULL
         ORDER BY rlm.sequence_no`,
       [reservationId],
@@ -46,7 +47,7 @@ export const loadBookingView = async (reservationId) => {
       `SELECT ada.id, ada.reservation_details_id AS legId, ada.status,
               ada.scheduled_start_at AS scheduledStartAt, ada.scheduled_end_at AS scheduledEndAt,
               d.full_name AS chauffeurName, d.photo AS chauffeurPhoto
-         FROM app_driver_assignments ada
+         FROM dl_mobile_driver_assignments ada
          JOIN drivers d ON d.id = ada.driver_id
         WHERE ada.reservation_id = ? AND ada.status <> 'CANCELLED'
         ORDER BY ada.created_at DESC`,

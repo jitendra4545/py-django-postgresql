@@ -85,7 +85,7 @@ router.get(
   '/unread-count',
   asyncHandler(async (request, response) => {
     const unread = await one(
-      'SELECT COUNT(*) AS total FROM app_notifications WHERE user_id=? AND read_at IS NULL',
+      'SELECT COUNT(*) AS total FROM dl_mobile_notifications WHERE user_id=? AND read_at IS NULL',
       [request.auth.userId],
     );
     response.json({ count: Number(unread.total) });
@@ -108,12 +108,12 @@ router.get(
     const suffix = unreadOnly ? ' AND read_at IS NULL' : '';
     const items = await query(
       `SELECT id,type,title,body,data,read_at AS readAt,created_at AS createdAt
-         FROM app_notifications WHERE user_id=?${suffix}
+         FROM dl_mobile_notifications WHERE user_id=?${suffix}
         ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?`,
       [request.auth.userId, perPage, offset],
     );
     const total = await one(
-      `SELECT COUNT(*) AS total FROM app_notifications WHERE user_id=?${suffix}`,
+      `SELECT COUNT(*) AS total FROM dl_mobile_notifications WHERE user_id=?${suffix}`,
       [request.auth.userId],
     );
     response.json(pageResponse(items, Number(total.total), page, perPage));
@@ -125,7 +125,7 @@ router.post(
   validate(z.object({ id: z.coerce.number().int().positive() }), 'params'),
   asyncHandler(async (request, response) => {
     await query(
-      `UPDATE notifications SET read_at=COALESCE(read_at,NOW()) WHERE app_mobile_id=? AND notifiable_id=? AND (notifiable_type=CONCAT('App',CHAR(92),'Models',CHAR(92),'User') OR app_type IS NOT NULL)`,
+      `UPDATE notifications SET read_at=COALESCE(read_at,NOW()) WHERE mobile_id=? AND notifiable_id=? AND notifiable_type=(SELECT option_value FROM app_settings WHERE option_key='dl.mobile.notification_model' ORDER BY id LIMIT 1)`,
       [request.params.id, request.auth.userId],
     );
     response.status(204).end();
@@ -135,7 +135,7 @@ router.post(
 router.post(
   '/read-all',
   asyncHandler(async (request, response) => {
-    await query(`UPDATE notifications SET read_at=COALESCE(read_at,NOW()) WHERE notifiable_id=? AND (notifiable_type=CONCAT('App',CHAR(92),'Models',CHAR(92),'User') OR app_type IS NOT NULL)`, [
+    await query(`UPDATE notifications SET read_at=COALESCE(read_at,NOW()) WHERE notifiable_id=? AND notifiable_type=(SELECT option_value FROM app_settings WHERE option_key='dl.mobile.notification_model' ORDER BY id LIMIT 1)`, [
       request.auth.userId,
     ]);
     response.status(204).end();

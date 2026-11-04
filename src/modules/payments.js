@@ -82,7 +82,7 @@
 //       if (status === 'PAID' && previousStatus !== 'PAID') {
 //         const [reservations] = await connection.execute(
 //           `SELECT r.status,arm.lifecycle_status FROM reservations r
-//             JOIN app_reservation_meta arm ON arm.reservation_id=r.id
+//             JOIN dl_mobile_reservation_meta arm ON arm.reservation_id=r.id
 //            WHERE r.id=? FOR UPDATE`,
 //           [payment.reservation_id],
 //         );
@@ -101,12 +101,12 @@
 //         );
 //         await connection.execute(
 //           `UPDATE reservations
-//               SET lifecycle_status=CASE
-//                     WHEN lifecycle_status='PAYMENT_PENDING' THEN 'CONFIRMED'
-//                     WHEN lifecycle_status='CHANGE_PAYMENT_PENDING' THEN 'CONFIRMED'
-//                     ELSE lifecycle_status
+//               SET mobile_legacy_status=status, mobile_lifecycle_status=CASE
+//                     WHEN mobile_lifecycle_status='PAYMENT_PENDING' THEN 'CONFIRMED'
+//                     WHEN mobile_lifecycle_status='CHANGE_PAYMENT_PENDING' THEN 'CONFIRMED'
+//                     ELSE mobile_lifecycle_status
 //                   END,
-//                   updated_at=NOW()
+//                   mobile_updated_at=NOW()
 //             WHERE id=?`,
 //           [payment.reservation_id],
 //         );
@@ -154,12 +154,12 @@
 //             payment.reservation_id,
 //           ]);
 //           await connection.execute(
-//             `UPDATE reservations SET lifecycle_status='CANCELLED',updated_at=NOW() WHERE id=?`,
+//             `UPDATE reservations SET mobile_legacy_status=status, mobile_lifecycle_status='CANCELLED',mobile_updated_at=NOW() WHERE id=?`,
 //             [payment.reservation_id],
 //           );
 //           await connection.execute(
-//             `UPDATE reservation_drivers SET app_assignment_status='CANCELLED',status=2,updated_at=NOW()
-//               WHERE reservation_id=? AND COALESCE(app_assignment_status,'OFFERED') NOT IN ('COMPLETED','CANCELLED')`,
+//             `UPDATE reservation_drivers SET mobile_assignment_status='CANCELLED',mobile_updated_at=NOW()
+//, status=2, updated_at=NOW() WHERE reservation_id=? AND COALESCE(mobile_assignment_status,CASE WHEN status=1 THEN 'OFFERED' ELSE 'CANCELLED' END) NOT IN ('COMPLETED','CANCELLED')`,
 //             [payment.reservation_id],
 //           );
 //           await connection.execute('DELETE FROM vehicle_reserved_dates WHERE reservation_id=?', [
@@ -223,7 +223,7 @@
 //       `SELECT r.status AS reservationStatus, arm.lifecycle_status AS lifecycleStatus,
 //               (q.valid_until > NOW()) AS quoteIsValid
 //          FROM reservations r
-//          JOIN app_reservation_meta arm ON arm.reservation_id=r.id
+//          JOIN dl_mobile_reservation_meta arm ON arm.reservation_id=r.id
 //          LEFT JOIN app_quote_snapshots q ON q.id=arm.quote_snapshot_id
 //         WHERE r.id=?`,
 //       [payment.reservation_id],
@@ -321,7 +321,7 @@
 //           [env.LEGACY_PAID_PAYMENT_STATUS, payment.reservation_id],
 //         );
 //         await connection.execute(
-//           `UPDATE reservations SET lifecycle_status='CONFIRMED',updated_at=NOW() WHERE id=?`,
+//           `UPDATE reservations SET mobile_legacy_status=status, mobile_lifecycle_status='CONFIRMED',mobile_updated_at=NOW() WHERE id=?`,
 //           [payment.reservation_id],
 //         );
 //         await connection.execute(
@@ -482,7 +482,7 @@ router.post(
              r.status,
              arm.lifecycle_status
            FROM reservations r
-           JOIN app_reservation_meta arm
+           JOIN dl_mobile_reservation_meta arm
              ON arm.reservation_id=r.id
            WHERE r.id=?
            FOR UPDATE`,
@@ -510,15 +510,15 @@ router.post(
 
         await connection.execute(
           `UPDATE reservations
-           SET lifecycle_status=
+           SET mobile_legacy_status=status, mobile_lifecycle_status=
              CASE
-               WHEN lifecycle_status='PAYMENT_PENDING'
+               WHEN mobile_lifecycle_status='PAYMENT_PENDING'
                  THEN 'CONFIRMED'
-               WHEN lifecycle_status='CHANGE_PAYMENT_PENDING'
+               WHEN mobile_lifecycle_status='CHANGE_PAYMENT_PENDING'
                  THEN 'CONFIRMED'
-               ELSE lifecycle_status
+               ELSE mobile_lifecycle_status
              END,
-             updated_at=NOW()
+             mobile_updated_at=NOW()
            WHERE id=?`,
           [payment.reservation_id],
         );
@@ -617,18 +617,17 @@ router.post(
 
           await connection.execute(
             `UPDATE reservations
-             SET lifecycle_status='CANCELLED',
-                 updated_at=NOW()
+             SET mobile_legacy_status=status, mobile_lifecycle_status='CANCELLED',
+                 mobile_updated_at=NOW()
              WHERE id=?`,
             [payment.reservation_id],
           );
 
           await connection.execute(
             `UPDATE reservation_drivers
-             SET app_assignment_status='CANCELLED',status=2,
-                 updated_at=NOW()
-             WHERE reservation_id=?
-               AND COALESCE(app_assignment_status,'OFFERED') NOT IN (
+             SET mobile_assignment_status='CANCELLED',
+                 mobile_updated_at=NOW(), status=CASE WHEN mobile_assignment_status IN ('DECLINED','CANCELLED') THEN 2 ELSE status END, updated_at=NOW() WHERE reservation_id=?
+               AND COALESCE(mobile_assignment_status,CASE WHEN status=1 THEN 'OFFERED' ELSE 'CANCELLED' END) NOT IN (
                  'COMPLETED',
                  'CANCELLED'
                )`,
@@ -775,7 +774,7 @@ router.post(
          arm.lifecycle_status AS lifecycleStatus,
          (q.valid_until > NOW()) AS quoteIsValid
        FROM reservations r
-       JOIN app_reservation_meta arm
+       JOIN dl_mobile_reservation_meta arm
          ON arm.reservation_id=r.id
        LEFT JOIN app_quote_snapshots q
          ON q.id=arm.quote_snapshot_id
@@ -940,8 +939,8 @@ router.post(
 
         await connection.execute(
           `UPDATE reservations
-           SET lifecycle_status='CONFIRMED',
-               updated_at=NOW()
+           SET mobile_legacy_status=status, mobile_lifecycle_status='CONFIRMED',
+               mobile_updated_at=NOW()
            WHERE id=?`,
           [payment.reservation_id],
         );

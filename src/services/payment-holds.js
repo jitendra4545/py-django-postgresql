@@ -4,7 +4,7 @@ import { cancelAbandonedPayment, createPaymentIntent, isStripeConnectivityError 
 export const releasePendingHold = async (connection, reservationId) => {
   const [rows] = await connection.execute(
     `SELECT r.id FROM reservations r
-      JOIN app_reservation_meta arm ON arm.reservation_id=r.id
+      JOIN dl_mobile_reservation_meta arm ON arm.reservation_id=r.id
       WHERE r.id=? AND r.status=0 AND r.payment_status=0
         AND arm.lifecycle_status='PAYMENT_PENDING' FOR UPDATE`,
     [reservationId],
@@ -21,7 +21,7 @@ export const releasePendingHold = async (connection, reservationId) => {
     reservationId,
   ]);
   await connection.execute(
-    `UPDATE reservations SET lifecycle_status='CANCELLED',updated_at=NOW()
+    `UPDATE reservations SET mobile_legacy_status=status, mobile_lifecycle_status='CANCELLED',mobile_updated_at=NOW()
       WHERE id=?`,
     [reservationId],
   );
@@ -51,7 +51,7 @@ export const sweepExpiredPaymentHolds = async () => {
               p.amount,p.currency,p.created_at AS createdAt,
               p.provider_reference AS providerReference
          FROM app_payment_transactions p
-         JOIN app_reservation_meta arm ON arm.reservation_id=p.reservation_id
+         JOIN dl_mobile_reservation_meta arm ON arm.reservation_id=p.reservation_id
          JOIN app_quote_snapshots q ON q.id=arm.quote_snapshot_id
         WHERE arm.lifecycle_status='PAYMENT_PENDING' AND q.valid_until<NOW()
           AND p.status NOT IN ('PAID','PROCESSING','REFUNDED')

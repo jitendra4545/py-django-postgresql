@@ -32,7 +32,7 @@ router.get(
       query(
         `SELECT r.id, r.reservation_no AS reservationNo, arm.service_code AS serviceCode,
               arm.lifecycle_status AS status, MIN(rd.pick_up_date) AS serviceDate
-         FROM reservations r JOIN app_reservation_meta arm ON arm.reservation_id=r.id
+         FROM reservations r JOIN dl_mobile_reservation_meta arm ON arm.reservation_id=r.id
          JOIN reservation_details rd ON rd.reservation_id=r.id AND rd.deleted_at IS NULL
         WHERE r.customer_id=? AND r.deleted_at IS NULL AND rd.pick_up_date >= CURRENT_DATE
           AND arm.lifecycle_status NOT IN ('COMPLETED','CANCELLED')
@@ -42,7 +42,7 @@ router.get(
       one(
         `SELECT r.id, r.reservation_no AS reservationNo, arm.service_code AS serviceCode,
               arm.lifecycle_status AS status
-         FROM reservations r JOIN app_reservation_meta arm ON arm.reservation_id=r.id
+         FROM reservations r JOIN dl_mobile_reservation_meta arm ON arm.reservation_id=r.id
         WHERE r.customer_id=? AND arm.lifecycle_status IN ('PREPARING','ON_THE_WAY','ARRIVED','WAITING','PASSENGER_ONBOARD','IN_SERVICE','AT_STOP','DROPOFF_REACHED')
         ORDER BY r.updated_at DESC LIMIT 1`,
         [request.auth.customerId],
@@ -50,7 +50,7 @@ router.get(
       query(
         `SELECT r.id, r.reservation_no AS reservationNo, arm.service_code AS serviceCode,
               arm.lifecycle_status AS status
-         FROM reservations r JOIN app_reservation_meta arm ON arm.reservation_id=r.id
+         FROM reservations r JOIN dl_mobile_reservation_meta arm ON arm.reservation_id=r.id
         WHERE r.customer_id=? AND arm.lifecycle_status IN ('COMPLETED','CANCELLED')
         ORDER BY r.updated_at DESC LIMIT 5`,
         [request.auth.customerId],

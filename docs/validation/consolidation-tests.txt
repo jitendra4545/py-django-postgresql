@@ -1,0 +1,224 @@
+
+> drive-luxury-backend-r1@2.4.0 consolidation:selftest
+> node --test tests/shared-storage.unit.node.mjs tests/consolidation-contract.node.mjs
+
+TAP version 13
+# Subtest: all original HTTP method/path pairs and their module locations are unchanged
+ok 1 - all original HTTP method/path pairs and their module locations are unchanged
+  ---
+  duration_ms: 3.964605
+  type: 'test'
+  ...
+# Subtest: all existing response-call expressions remain present verbatim except whitespace
+ok 2 - all existing response-call expressions remain present verbatim except whitespace
+  ---
+  duration_ms: 3.347825
+  type: 'test'
+  ...
+# Subtest: existing request validation expressions are unchanged
+ok 3 - existing request validation expressions are unchanged
+  ---
+  duration_ms: 3.665994
+  type: 'test'
+  ...
+# Subtest: OpenAPI, app mounting, auth, errors, pagination, enums and historical migrations retain original hashes
+ok 4 - OpenAPI, app mounting, auth, errors, pagination, enums and historical migrations retain original hashes
+  ---
+  duration_ms: 1.542984
+  type: 'test'
+  ...
+# Subtest: runtime business queries no longer read or write the eight retired tables
+ok 5 - runtime business queries no longer read or write the eight retired tables
+  ---
+  duration_ms: 14.587049
+  type: 'test'
+  ...
+# Subtest: all compatibility projections are read-only in application code
+ok 6 - all compatibility projections are read-only in application code
+  ---
+  duration_ms: 2.614008
+  type: 'test'
+  ...
+# Subtest: migration does not drop or rename client tables, original fields or original indexes
+ok 7 - migration does not drop or rename client tables, original fields or original indexes
+  ---
+  duration_ms: 0.867197
+  type: 'test'
+  ...
+# Subtest: audit retention never deletes website route logs
+ok 8 - audit retention never deletes website route logs
+  ---
+  duration_ms: 0.256557
+  type: 'test'
+  ...
+# Subtest: server fails closed before starting workers/listener when shared migration is missing
+ok 9 - server fails closed before starting workers/listener when shared migration is missing
+  ---
+  duration_ms: 0.41133
+  type: 'test'
+  ...
+# Subtest: website-created bookings cannot be automatically repriced using invented mobile snapshots
+ok 10 - website-created bookings cannot be automatically repriced using invented mobile snapshots
+  ---
+  duration_ms: 0.483078
+  type: 'test'
+  ...
+# Subtest: SELECT-star compatibility views retain the historical public column sets and order
+ok 11 - SELECT-star compatibility views retain the historical public column sets and order
+  ---
+  duration_ms: 2.656353
+  type: 'test'
+  ...
+# Subtest: current GPS is bound to the canonical assignment driver, not merely the historical assignment id
+ok 12 - current GPS is bound to the canonical assignment driver, not merely the historical assignment id
+  ---
+  duration_ms: 0.214153
+  type: 'test'
+  ...
+# Subtest: long addresses preserve Unicode boundaries and nulls
+ok 13 - long addresses preserve Unicode boundaries and nulls
+  ---
+  duration_ms: 1.376864
+  type: 'test'
+  ...
+# Subtest: booking metadata is updated on existing reservations without replacing their keys
+ok 14 - booking metadata is updated on existing reservations without replacing their keys
+  ---
+  duration_ms: 0.51081
+  type: 'test'
+  ...
+# Subtest: leg writer stores full structured addresses and flight rows in existing tables
+ok 15 - leg writer stores full structured addresses and flight rows in existing tables
+  ---
+  duration_ms: 1.000567
+  type: 'test'
+  ...
+# Subtest: assignment writer creates exactly one legacy assignment and numeric alias
+ok 16 - assignment writer creates exactly one legacy assignment and numeric alias
+  ---
+  duration_ms: 0.341445
+  type: 'test'
+  ...
+# Subtest: trip statuses map only an unambiguous client slug
+ok 17 - trip statuses map only an unambiguous client slug
+  ---
+  duration_ms: 0.545302
+  type: 'test'
+  ...
+# Subtest: message writer uses native messages and recipient rows without changing numeric ids
+ok 18 - message writer uses native messages and recipient rows without changing numeric ids
+  ---
+  duration_ms: 0.363878
+  type: 'test'
+  ...
+# Subtest: private/local document metadata is not turned into a public shared attachment
+ok 19 - private/local document metadata is not turned into a public shared attachment
+  ---
+  duration_ms: 0.295516
+  type: 'test'
+  ...
+# Subtest: native messages are recipient-gated for clients and drivers, with safe SQL principals
+ok 20 - native messages are recipient-gated for clients and drivers, with safe SQL principals
+  ---
+  duration_ms: 0.703209
+  type: 'test'
+  ...
+# Subtest: native read receipts are scoped to one user, conversation, and message time
+ok 21 - native read receipts are scoped to one user, conversation, and message time
+  ---
+  duration_ms: 0.527405
+  type: 'test'
+  ...
+# Subtest: shared notification retains UUID storage, numeric public ID and payload envelope
+ok 22 - shared notification retains UUID storage, numeric public ID and payload envelope
+  ---
+  duration_ms: 0.945354
+  type: 'test'
+  ...
+# Subtest: notification writer fails closed without the client User morph configuration
+ok 23 - notification writer fails closed without the client User morph configuration
+  ---
+  duration_ms: 0.511681
+  type: 'test'
+  ...
+# Subtest: both manual request types populate native required fields and keep nullable request text
+ok 24 - both manual request types populate native required fields and keep nullable request text
+  ---
+  duration_ms: 0.495897
+  type: 'test'
+  ...
+# Subtest: audit batches use only native logs, preserve JSON and scope their origin
+ok 25 - audit batches use only native logs, preserve JSON and scope their origin
+  ---
+  duration_ms: 0.318019
+  type: 'test'
+  ...
+# Subtest: MariaDB JSON strings normalize without parsing ordinary body fields or double-decoding objects
+ok 26 - MariaDB JSON strings normalize without parsing ordinary body fields or double-decoding objects
+  ---
+  duration_ms: 0.372752
+  type: 'test'
+  ...
+# Subtest: notification morph is inferred only when unambiguous, explicit custom morph allowed
+ok 27 - notification morph is inferred only when unambiguous, explicit custom morph allowed
+  ---
+  duration_ms: 0.339441
+  type: 'test'
+  ...
+# Subtest: migration UUID is deterministic and does not conflate different source identifiers
+ok 28 - migration UUID is deterministic and does not conflate different source identifiers
+  ---
+  duration_ms: 0.706855
+  type: 'test'
+  ...
+# Subtest: migration cannot run without explicit shared-schema consent
+ok 29 - migration cannot run without explicit shared-schema consent
+  ---
+  duration_ms: 0.401565
+  type: 'test'
+  ...
+# Subtest: read projections cover all eight retired stores without write-through views
+ok 30 - read projections cover all eight retired stores without write-through views
+  ---
+  duration_ms: 0.415536
+  type: 'test'
+  ...
+# Subtest: preflight rejects undersized or signedness-conflicting extension columns
+ok 31 - preflight rejects undersized or signedness-conflicting extension columns
+  ---
+  duration_ms: 1.816687
+  type: 'test'
+  ...
+# Subtest: startup readiness requires a matching checksum, all columns, views, indexes and remapped foreign keys
+ok 32 - startup readiness requires a matching checksum, all columns, views, indexes and remapped foreign keys
+  ---
+  duration_ms: 15.716712
+  type: 'test'
+  ...
+# Subtest: startup refuses to serve when a unique alias index is missing
+ok 33 - startup refuses to serve when a unique alias index is missing
+  ---
+  duration_ms: 8.626049
+  type: 'test'
+  ...
+# Subtest: startup refuses to serve when a push job foreign key is missing
+ok 34 - startup refuses to serve when a push job foreign key is missing
+  ---
+  duration_ms: 6.998802
+  type: 'test'
+  ...
+# Subtest: native reassignment resets old-driver progress before the replacement acknowledges
+ok 35 - native reassignment resets old-driver progress before the replacement acknowledges
+  ---
+  duration_ms: 0.316477
+  type: 'test'
+  ...
+1..35
+# tests 35
+# suites 0
+# pass 35
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 116.544622

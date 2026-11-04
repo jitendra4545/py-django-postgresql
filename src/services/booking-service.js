@@ -1,3 +1,4 @@
+import { setReservationMetadata, setLegMetadata, legacyText } from './shared-storage.js';
 import crypto from 'node:crypto';
 import { v4 as uuid } from 'uuid';
 import { AppError } from '../common/errors.js';
@@ -205,15 +206,12 @@ export const createLegacyReservation = async (connection, { draft, quote, auth }
     reservationNo,
     reservationId,
   ]);
-  // The existing website reservation row owns the mobile extension fields.
-  // Only ADDITIVE columns are updated; no original keys or identity fields change.
-  await connection.execute(
-    `UPDATE reservations SET service_code=?,source_channel=?,created_by_user_id=?,
-       created_by_agent_id=?,lifecycle_status='PAYMENT_PENDING',currency_code=?,
-       quote_snapshot_id=?,updated_at=NOW() WHERE id=?`,
-    [draft.service_code,auth.role === 4 ? 'AGENCY_AGENT_APP' : 'CLIENT_APP',
-     auth.userId,auth.agentId ?? null,quote.currency,draft.quote_snapshot_id,reservationId],
-  );
+  await setReservationMetadata(connection, {
+    reservationId, serviceCode: draft.service_code,
+    sourceChannel: auth.role === 4 ? 'AGENCY_AGENT_APP' : 'CLIENT_APP',
+    userId: auth.userId, agentId: auth.agentId ?? null, status: 'PAYMENT_PENDING',
+    currency: quote.currency, quoteSnapshotId: draft.quote_snapshot_id,
+  });
 
   for (const [index, leg] of details.legs.entries()) {
     const endAt =
@@ -238,8 +236,8 @@ export const createLegacyReservation = async (connection, { draft, quote, auth }
         }),
         leg.isHourly ? 1 : 0,
         legQuote.distanceKm ?? 0,
-        leg.pickup.address,
-        leg.dropoff?.address ?? null,
+        legacyText(leg.pickup.address),
+        legacyText(leg.dropoff?.address),
         sqlDate(leg.startAt),
         sqlDate(endAt),
         sqlTime(leg.startAt),
@@ -255,34 +253,30 @@ export const createLegacyReservation = async (connection, { draft, quote, auth }
       ],
     );
     const detailId = detailResult.insertId;
-    // Keep each trip leg in the original reservation_details row; no shadow leg.
-    await connection.execute(
-      `UPDATE reservation_details SET sequence_no=?,vehicle_class_id=?,passenger_count=?,
-        luggage_count=?,pickup_details=?,dropoff_details=?,flight_number=?,
-        app_leg_status='PENDING',updated_at=NOW() WHERE id=? AND reservation_id=?`,
-      [index + 1,details.vehicleClassId,details.passenger?.count ?? 1,
-       details.passenger?.luggageCount ?? 0,JSON.stringify(leg.pickup),
-       JSON.stringify(leg.dropoff ?? {}),details.passenger?.flightNumber ?? null,
-       detailId,reservationId],
-    );
-
+    await setLegMetadata(connection, {
+      reservationId, detailId, sequenceNo: index + 1, vehicleClassId: details.vehicleClassId,
+      passengerCount: details.passenger?.count ?? 1, luggageCount: details.passenger?.luggageCount ?? 0,
+      pickup: leg.pickup, dropoff: leg.dropoff, flightNumber: details.passenger?.flightNumber ?? null,
+      status: 'PENDING',
+    });
     const stops = [...(leg.stops ?? []), ...(leg.dropoff ? [leg.dropoff] : [])];
     for (const [stopIndex, stop] of stops.entries()) {
       await connection.execute(
         `INSERT INTO reservation_itineraries
           (reservation_id, reservation_details_id, reservation_date, full_address,
-           country_id, city, distance, duration, status, sort_numer, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NOW(), NOW())`,
+           country_id, city, distance, duration, status, sort_numer, created_at, updated_at, mobile_full_address)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NOW(), NOW(), ?)`,
         [
           reservationId,
           detailId,
           sqlDate(leg.startAt),
-          stop.address,
+          legacyText(stop.address),
           stop.countryId ?? null,
           stop.city ?? null,
           stop.distanceKm ?? 0,
           stop.durationMinutes ?? 0,
           stopIndex + 1,
+          stop.address,
         ],
       );
     }

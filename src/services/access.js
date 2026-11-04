@@ -21,7 +21,7 @@ export const getReservationForAccess = async (auth, reservationId) => {
   const reservation = await one(
     `SELECT r.*, arm.created_by_agent_id, arm.service_code, arm.lifecycle_status
        FROM reservations r
-       LEFT JOIN app_reservation_meta arm ON arm.reservation_id = r.id
+       LEFT JOIN dl_mobile_reservation_meta arm ON arm.reservation_id = r.id
       WHERE r.id = ? AND r.deleted_at IS NULL`,
     [reservationId],
   );
@@ -36,7 +36,7 @@ export const getReservationForAccess = async (auth, reservationId) => {
   }
   if (auth.role === ROLES.CHAUFFEUR) {
     const assignment = await one(
-      `SELECT id FROM app_driver_assignments
+      `SELECT id FROM dl_mobile_driver_assignments
         WHERE reservation_id = ? AND driver_id = ? AND status NOT IN ('DECLINED','CANCELLED')`,
       [reservationId, auth.driverId],
     );

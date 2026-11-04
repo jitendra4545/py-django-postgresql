@@ -1,0 +1,6 @@
+
+> drive-luxury-backend-r1@2.4.0 syntax:check
+> node scripts/check-syntax.js && node scripts/check-openapi.js
+
+Syntax OK: 106 JavaScript files
+OpenAPI coverage OK: 96 operations

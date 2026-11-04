@@ -1,3 +1,4 @@
+import { createSharedNotification } from './shared-storage.js';
 import { query, transaction } from '../db/pool.js';
 import { emitToUser } from './realtime.js';
 
@@ -5,20 +6,14 @@ import { emitToUser } from './realtime.js';
 // the database-backed worker, so a Node restart cannot silently lose it.
 export const notifyUser = async ({ userId, type, title, body, data = {} }, connection = null) => {
   const persist = async (executor) => {
-    const [result] = await executor.execute(
-      `INSERT INTO notifications
-        (id,type,notifiable_type,notifiable_id,data,app_type,app_title,app_body,created_at,updated_at)
-       VALUES (UUID(),'AppMobileNotification',CONCAT('App',CHAR(92),'Models',CHAR(92),'User'),
-               ?,?,?,?,?,NOW(),NOW())`,
-      [userId, JSON.stringify(data), type, title, body],
-    );
+    const notificationId = await createSharedNotification(executor, { userId, type, title, body, data });
     await executor.execute(
       `INSERT INTO app_push_delivery_jobs
          (notification_id,user_id,status,next_attempt_at,created_at,updated_at)
        VALUES (?,?,'PENDING',NOW(),NOW(),NOW())`,
-      [result.insertId, userId],
+      [notificationId, userId],
     );
-    return result.insertId;
+    return notificationId;
   };
   // Outside a caller-owned transaction, use a single transaction for inbox+outbox.
   const id = connection ? await persist(connection) : await transaction(persist);
@@ -50,7 +45,7 @@ export const notifyBookingAudience = async (
       WHERE r.id = ?
      UNION
      SELECT DISTINCT d.user_id
-       FROM app_driver_assignments ada
+       FROM dl_mobile_driver_assignments ada
        JOIN drivers d ON d.id = ada.driver_id
       WHERE ada.reservation_id = ? AND ada.status NOT IN ('DECLINED','CANCELLED')`,
     [reservationId, reservationId, reservationId],

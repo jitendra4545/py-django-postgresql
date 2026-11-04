@@ -1,4 +1,4 @@
--- Push jobs reference the website notifications table through its additive app_mobile_id.
+-- Expo push delivery is additive. Existing app_notifications and legacy tables are unchanged.
 CREATE TABLE IF NOT EXISTS app_push_delivery_jobs (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   notification_id BIGINT UNSIGNED NOT NULL,
@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS app_push_delivery_jobs (
   PRIMARY KEY (id),
   UNIQUE KEY uq_app_push_job_notification (notification_id),
   KEY idx_app_push_job_due (status,next_attempt_at,locked_until),
-  CONSTRAINT fk_app_push_job_notification FOREIGN KEY (notification_id) REFERENCES notifications(app_mobile_id) ON DELETE CASCADE,
+  CONSTRAINT fk_app_push_job_notification FOREIGN KEY (notification_id) REFERENCES app_notifications(id) ON DELETE CASCADE,
   CONSTRAINT fk_app_push_job_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

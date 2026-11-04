@@ -3,8 +3,8 @@ import { pool, query } from '../db/pool.js';
 
 try {
   const rows = await query(
-    `DELETE FROM app_api_request_logs
-     WHERE created_at < DATE_SUB(NOW(3), INTERVAL ? DAY)
+    `DELETE FROM route_access_logs
+     WHERE mobile_source='MOBILE_API' AND created_at < DATE_SUB(NOW(3), INTERVAL ? DAY)
      ORDER BY created_at ASC LIMIT 5000`,
     [env.API_AUDIT_LOG_RETENTION_DAYS],
   );

@@ -1,5 +1,5 @@
+import { createSharedAssignment } from '../services/shared-storage.js';
 import { Router } from 'express';
-import { toUtcSqlDateTime } from '../common/utc-sql-datetime.js';
 import { z } from 'zod';
 import { asyncHandler } from '../common/async-handler.js';
 import { requireAuth, requireRoles } from '../common/auth.js';
@@ -210,8 +210,8 @@ router.get(
   validate(
     z
       .object({
-        startAt: z.string().datetime({ offset: true }),
-        endAt: z.string().datetime({ offset: true }),
+        startAt: z.string().datetime(),
+        endAt: z.string().datetime(),
         countryId: z.coerce.number().int().positive().optional(),
         cityId: z.coerce.number().int().positive().optional(),
         providerId: z.coerce.number().int().positive().optional(),
@@ -222,10 +222,10 @@ router.get(
     'query',
   ),
   asyncHandler(async (request, response) => {
-    const start = toUtcSqlDateTime(request.query.startAt);
-    const end = toUtcSqlDateTime(request.query.endAt);
+    const start = request.query.startAt.slice(0, 19).replace('T', ' ');
+    const end = request.query.endAt.slice(0, 19).replace('T', ' ');
     const filters = [];
-    const params = [end, start];
+    const params = [end, start, end, start];
     for (const [field, column] of [
       ['countryId', 'd.country_id'],
       ['cityId', 'd.city_id'],
@@ -243,10 +243,22 @@ router.get(
          JOIN users u ON u.id=d.user_id AND u.status=0 AND u.role=3 AND u.deleted_at IS NULL
         WHERE d.deleted_at IS NULL
           AND NOT EXISTS (
-            SELECT 1 FROM app_driver_assignments ada
+            SELECT 1 FROM dl_mobile_driver_assignments ada
              WHERE ada.driver_id=d.id
                AND ada.status NOT IN ('DECLINED','COMPLETED','NO_SHOW','CANCELLED')
                AND ada.scheduled_start_at < ? AND ada.scheduled_end_at > ?
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM reservation_drivers legacy_assignment
+            JOIN reservation_details legacy_leg ON legacy_leg.id=legacy_assignment.reservation_details_id
+            JOIN reservations legacy_booking ON legacy_booking.id=legacy_assignment.reservation_id
+             WHERE (legacy_assignment.pick_up_driver_id=d.id OR legacy_assignment.drop_off_driver_id=d.id)
+               AND legacy_assignment.status=1 AND legacy_assignment.deleted_at IS NULL
+               AND legacy_leg.deleted_at IS NULL AND legacy_booking.deleted_at IS NULL
+               AND legacy_booking.status NOT IN (2,3)
+               AND (CASE WHEN legacy_assignment.mobile_status_driver_id IS NOT NULL AND NOT(legacy_assignment.mobile_status_driver_id<=>COALESCE(legacy_assignment.pick_up_driver_id,legacy_assignment.drop_off_driver_id)) THEN 'OFFERED' ELSE COALESCE(legacy_assignment.mobile_assignment_status,'OFFERED') END) NOT IN ('DECLINED','COMPLETED','NO_SHOW','CANCELLED')
+               AND TIMESTAMP(COALESCE(legacy_assignment.pick_up_date,legacy_leg.pick_up_date),COALESCE(legacy_assignment.pick_up_time,legacy_leg.pick_up_time)) < ?
+               AND TIMESTAMP(COALESCE(legacy_assignment.drop_off_date,legacy_leg.drop_off_date),COALESCE(legacy_assignment.drop_off_time,legacy_leg.drop_off_time)) > ?
           )
           ${filters.length ? `AND ${filters.join(' AND ')}` : ''}
         ORDER BY d.full_name`,
@@ -292,7 +304,7 @@ router.get(
               arm.service_code AS serviceCode,arm.lifecycle_status AS status,
               costs.totalAmount,arm.currency_code AS currency
          FROM reservations r
-         JOIN app_reservation_meta arm ON arm.reservation_id=r.id
+         JOIN dl_mobile_reservation_meta arm ON arm.reservation_id=r.id
          JOIN customers c ON c.id=r.customer_id
          LEFT JOIN (
            SELECT reservation_id,SUM(total_amount) AS totalAmount
@@ -312,7 +324,7 @@ router.post(
   ),
   asyncHandler(async (request, response) => {
     const reservation = await one(
-      `SELECT r.id,arm.lifecycle_status FROM reservations r JOIN app_reservation_meta arm ON arm.reservation_id=r.id WHERE r.id=? FOR UPDATE`,
+      `SELECT r.id,arm.lifecycle_status FROM reservations r JOIN dl_mobile_reservation_meta arm ON arm.reservation_id=r.id WHERE r.id=? FOR UPDATE`,
       [request.params.reservationId],
     );
     if (!reservation) throw notFound('Booking not found');
@@ -329,7 +341,7 @@ router.post(
         ],
       );
       await connection.execute(
-        'UPDATE reservations SET lifecycle_status=?,updated_at=NOW() WHERE id=?',
+        'UPDATE reservations SET mobile_legacy_status=status, mobile_lifecycle_status=?,mobile_updated_at=NOW() WHERE id=?',
         [status, reservation.id],
       );
       await connection.execute(
@@ -363,16 +375,19 @@ router.post(
   validate(
     z.object({
       driverId: z.number().int().positive(),
-      scheduledStartAt: z.string().datetime({ offset: true }),
-      scheduledEndAt: z.string().datetime({ offset: true }),
+      scheduledStartAt: z.string().datetime(),
+      scheduledEndAt: z.string().datetime(),
     }),
   ),
   asyncHandler(async (request, response) => {
-    const start = toUtcSqlDateTime(request.body.scheduledStartAt);
-    const end = toUtcSqlDateTime(request.body.scheduledEndAt);
+    if (new Date(request.body.scheduledEndAt) <= new Date(request.body.scheduledStartAt)) {
+      throw conflict('scheduledEndAt must be after scheduledStartAt');
+    }
+    const start = request.body.scheduledStartAt.slice(0, 19).replace('T', ' ');
+    const end = request.body.scheduledEndAt.slice(0, 19).replace('T', ' ');
     const result = await transaction(async (connection) => {
       const [details] = await connection.execute(
-        `SELECT rd.id,rd.reservation_id FROM reservation_details rd JOIN app_reservation_meta arm ON arm.reservation_id=rd.reservation_id WHERE rd.id=? AND rd.reservation_id=? AND arm.lifecycle_status IN ('CONFIRMED','ASSIGNED') FOR UPDATE`,
+        `SELECT rd.id,rd.reservation_id FROM reservation_details rd JOIN dl_mobile_reservation_meta arm ON arm.reservation_id=rd.reservation_id WHERE rd.id=? AND rd.reservation_id=? AND arm.lifecycle_status IN ('CONFIRMED','ASSIGNED') FOR UPDATE`,
         [request.params.detailId, request.params.reservationId],
       );
       if (!details[0]) throw notFound('Confirmed booking leg not found');
@@ -382,28 +397,34 @@ router.post(
       );
       if (!drivers[0]) throw notFound('Chauffeur not found');
       const [conflicts] = await connection.execute(
-        `SELECT id FROM app_driver_assignments WHERE driver_id=? AND status NOT IN ('DECLINED','COMPLETED','NO_SHOW','CANCELLED') AND scheduled_start_at < ? AND scheduled_end_at > ? LIMIT 1`,
+        `SELECT id FROM dl_mobile_driver_assignments WHERE driver_id=? AND status NOT IN ('DECLINED','COMPLETED','NO_SHOW','CANCELLED') AND scheduled_start_at < ? AND scheduled_end_at > ? LIMIT 1`,
         [request.body.driverId, end, start],
       );
       if (conflicts[0]) throw conflict('The chauffeur already has an overlapping assignment');
+      const [legacyConflicts] = await connection.execute(
+        `SELECT legacy_assignment.id FROM reservation_drivers legacy_assignment
+           JOIN reservation_details legacy_leg ON legacy_leg.id=legacy_assignment.reservation_details_id
+           JOIN reservations legacy_booking ON legacy_booking.id=legacy_assignment.reservation_id
+          WHERE (legacy_assignment.pick_up_driver_id=? OR legacy_assignment.drop_off_driver_id=?)
+            AND legacy_assignment.status=1 AND legacy_assignment.deleted_at IS NULL
+            AND legacy_leg.deleted_at IS NULL AND legacy_booking.deleted_at IS NULL
+            AND legacy_booking.status NOT IN (2,3)
+            AND (CASE WHEN legacy_assignment.mobile_status_driver_id IS NOT NULL AND NOT(legacy_assignment.mobile_status_driver_id<=>COALESCE(legacy_assignment.pick_up_driver_id,legacy_assignment.drop_off_driver_id)) THEN 'OFFERED' ELSE COALESCE(legacy_assignment.mobile_assignment_status,'OFFERED') END) NOT IN ('DECLINED','COMPLETED','NO_SHOW','CANCELLED')
+            AND TIMESTAMP(COALESCE(legacy_assignment.pick_up_date,legacy_leg.pick_up_date),COALESCE(legacy_assignment.pick_up_time,legacy_leg.pick_up_time)) < ?
+            AND TIMESTAMP(COALESCE(legacy_assignment.drop_off_date,legacy_leg.drop_off_date),COALESCE(legacy_assignment.drop_off_time,legacy_leg.drop_off_time)) > ? LIMIT 1`,
+        [request.body.driverId, request.body.driverId, end, start],
+      );
+      if (legacyConflicts[0]) throw conflict('The chauffeur already has an overlapping assignment');
       await connection.execute(
-        `UPDATE reservation_drivers SET app_assignment_status='CANCELLED',status=2,updated_at=NOW() WHERE reservation_details_id=? AND COALESCE(app_assignment_status,'OFFERED') NOT IN ('COMPLETED','CANCELLED','DECLINED')`,
+        `UPDATE reservation_drivers SET mobile_assignment_status='CANCELLED',mobile_updated_at=NOW(), status=2, updated_at=NOW() WHERE reservation_details_id=? AND COALESCE(mobile_assignment_status,CASE WHEN status=1 THEN 'OFFERED' ELSE 'CANCELLED' END) NOT IN ('COMPLETED','CANCELLED','DECLINED')`,
         [request.params.detailId],
       );
-      // One physical chauffeur assignment only, in the production website table.
-      // The mobile assignment ID is the original reservation_drivers.id.
-      const [assignment] = await connection.execute(
-        `INSERT INTO reservation_drivers
-          (reservation_id,reservation_details_id,pick_up_date,pick_up_time,
-           pick_up_driver_id,user_id,status,app_assignment_status,scheduled_start_at,
-           scheduled_end_at,assigned_by_user_id,created_at,updated_at)
-         VALUES (?,?,DATE(?),TIME(?),?, ?,1,'OFFERED',?,?,?,NOW(),NOW())`,
-        [request.params.reservationId,request.params.detailId,start,start,
-         request.body.driverId,request.auth.userId,start,end,request.auth.userId],
-      );
-
+      const assignment = await createSharedAssignment(connection, {
+        reservationId: request.params.reservationId, detailId: request.params.detailId,
+        driverId: request.body.driverId, startAt: start, endAt: end, userId: request.auth.userId,
+      });
       await connection.execute(
-        `UPDATE reservations SET lifecycle_status='ASSIGNED',updated_at=NOW() WHERE id=?`,
+        `UPDATE reservations SET mobile_legacy_status=status, mobile_lifecycle_status='ASSIGNED',mobile_updated_at=NOW() WHERE id=?`,
         [request.params.reservationId],
       );
       await connection.execute(
@@ -453,8 +474,8 @@ router.get(
         vehicleClassId: z.coerce.number().int().positive(),
         countryId: z.coerce.number().int().positive().optional(),
         cityId: z.coerce.number().int().positive().optional(),
-        startAt: z.string().datetime({ offset: true }),
-        endAt: z.string().datetime({ offset: true }),
+        startAt: z.string().datetime(),
+        endAt: z.string().datetime(),
       })
       .refine((value) => new Date(value.endAt) > new Date(value.startAt), {
         message: 'endAt must be after startAt',
@@ -473,7 +494,7 @@ router.post(
   asyncHandler(async (request, response) => {
     const assignment = await transaction(async (connection) => {
       const [details] = await connection.execute(
-        `SELECT rd.*,rlm.vehicle_class_id FROM reservation_details rd JOIN app_reservation_leg_meta rlm ON rlm.reservation_details_id=rd.id WHERE rd.id=? AND rd.reservation_id=? FOR UPDATE`,
+        `SELECT rd.*,rlm.vehicle_class_id FROM reservation_details rd JOIN dl_mobile_reservation_leg_meta rlm ON rlm.reservation_details_id=rd.id WHERE rd.id=? AND rd.reservation_id=? FOR UPDATE`,
         [request.params.detailId, request.params.reservationId],
       );
       const detail = details[0];
@@ -631,7 +652,7 @@ router.post(
           [request.body.resolutionNote, request.auth.userId, item.id],
         );
         await connection.execute(
-          `UPDATE reservations SET lifecycle_status=?,updated_at=NOW() WHERE id=?`,
+          `UPDATE reservations SET mobile_legacy_status=status, mobile_lifecycle_status=?,mobile_updated_at=NOW() WHERE id=?`,
           [item.previous_lifecycle_status, item.reservation_id],
         );
         await writeActivityLog(connection, {
@@ -701,7 +722,7 @@ router.post(
         [request.body.resolutionNote, request.auth.userId, item.id],
       );
       await connection.execute(
-        `UPDATE reservations SET lifecycle_status=?,updated_at=NOW() WHERE id=?`,
+        `UPDATE reservations SET mobile_legacy_status=status, mobile_lifecycle_status=?,mobile_updated_at=NOW() WHERE id=?`,
         [lifecycleStatus, item.reservation_id],
       );
       await connection.execute(
@@ -840,11 +861,11 @@ router.post(
           [request.auth.userId, item.reservation_id],
         );
         await connection.execute(
-          `UPDATE reservations SET lifecycle_status='CANCELLED',updated_at=NOW() WHERE id=?`,
+          `UPDATE reservations SET mobile_legacy_status=status, mobile_lifecycle_status='CANCELLED',mobile_updated_at=NOW() WHERE id=?`,
           [item.reservation_id],
         );
         await connection.execute(
-          `UPDATE reservation_drivers SET app_assignment_status='CANCELLED',status=2,updated_at=NOW() WHERE reservation_id=? AND COALESCE(app_assignment_status,'OFFERED') NOT IN ('COMPLETED','CANCELLED')`,
+          `UPDATE reservation_drivers SET mobile_assignment_status='CANCELLED',mobile_updated_at=NOW(), status=2, updated_at=NOW() WHERE reservation_id=? AND COALESCE(mobile_assignment_status,CASE WHEN status=1 THEN 'OFFERED' ELSE 'CANCELLED' END) NOT IN ('COMPLETED','CANCELLED')`,
           [item.reservation_id],
         );
         await connection.execute(`DELETE FROM vehicle_reserved_dates WHERE reservation_id=?`, [
@@ -863,12 +884,12 @@ router.post(
           );
         }
         await connection.execute(
-          `UPDATE reservations SET lifecycle_status='CANCELLATION_APPROVED',updated_at=NOW() WHERE id=?`,
+          `UPDATE reservations SET mobile_legacy_status=status, mobile_lifecycle_status='CANCELLATION_APPROVED',mobile_updated_at=NOW() WHERE id=?`,
           [item.reservation_id],
         );
       } else {
         await connection.execute(
-          `UPDATE reservations SET lifecycle_status=?,updated_at=NOW() WHERE id=?`,
+          `UPDATE reservations SET mobile_legacy_status=status, mobile_lifecycle_status=?,mobile_updated_at=NOW() WHERE id=?`,
           [item.previous_lifecycle_status, item.reservation_id],
         );
       }
@@ -987,13 +1008,13 @@ router.patch(
   ),
   asyncHandler(async (request, response) => {
     const result = await query(
-      `UPDATE app_vip_requests SET status=?,operations_note=?,updated_at=NOW() WHERE id=?`,
+      `UPDATE contacts SET mobile_request_status=?,mobile_operations_note=?,updated_at=NOW() WHERE COALESCE(mobile_request_id,id)=? AND mobile_request_type='AIRPORT_VIP'`,
       [request.body.status, request.body.operationsNote ?? null, request.params.requestId],
     );
     if (!result.affectedRows) throw notFound('VIP request not found');
     const vip = await one(
       `SELECT r.created_by_user_id AS creatorId,c.user_id AS customerUserId
-         FROM app_vip_requests r JOIN customers c ON c.id=r.customer_id WHERE r.id=?`,
+         FROM dl_mobile_vip_requests r JOIN customers c ON c.id=r.customer_id WHERE r.id=?`,
       [request.params.requestId],
     );
     if (vip) {
@@ -1025,13 +1046,13 @@ router.patch(
   ),
   asyncHandler(async (request, response) => {
     const result = await query(
-      `UPDATE app_concierge_requests SET status=?,operations_note=?,updated_at=NOW() WHERE id=?`,
+      `UPDATE contacts SET mobile_request_status=?,mobile_operations_note=?,updated_at=NOW() WHERE COALESCE(mobile_request_id,id)=? AND mobile_request_type='CONCIERGE'`,
       [request.body.status, request.body.operationsNote ?? null, request.params.requestId],
     );
     if (!result.affectedRows) throw notFound('Concierge request not found');
     const concierge = await one(
       `SELECT r.created_by_user_id AS creatorId,c.user_id AS customerUserId
-         FROM app_concierge_requests r JOIN customers c ON c.id=r.customer_id WHERE r.id=?`,
+         FROM dl_mobile_concierge_requests r JOIN customers c ON c.id=r.customer_id WHERE r.id=?`,
       [request.params.requestId],
     );
     if (concierge) {
