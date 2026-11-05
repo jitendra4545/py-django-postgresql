@@ -18,8 +18,7 @@ let transactionCount = 0;
 let pushed = [];
 const execute = async (sql, params = []) => {
   writes.push({ sql, params });
-  if (sql.includes("dl.mobile.notification_model")) return [[{ option_value: "App\\Models\\User" }]];
-  if (sql.includes('INSERT INTO notifications')) return [{ insertId: ++nextNotificationId }];
+  if (sql.includes('INSERT INTO app_notifications')) return [{ insertId: ++nextNotificationId }];
   if (sql.includes('INSERT INTO app_push_delivery_jobs')) return [{ insertId: 30 }];
   if (sql.includes('SELECT DISTINCT u.id AS userId')) {
     return [[{ userId: 11 }, { userId: 12 }]];
@@ -92,9 +91,9 @@ await notifyBookingAudience(
     excludeUserIds: [12],
   },
 );
-assert.equal(writes.filter((call) => call.sql.includes('INSERT INTO notifications')).length, 1);
+assert.equal(writes.filter((call) => call.sql.includes('INSERT INTO app_notifications')).length, 1);
 assert.equal(
-  writes.find((call) => call.sql.includes('INSERT INTO notifications')).params[3],
+  writes.find((call) => call.sql.includes('INSERT INTO app_notifications')).params[0],
   11,
 );
 

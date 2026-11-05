@@ -1,8 +1,0 @@
-
-> drive-luxury-backend-r1@2.4.0 notifications:selftest
-> node --experimental-test-module-mocks scripts/selftest-expo-notifications.mjs
-
-(node:8764) ExperimentalWarning: Module mocking is an experimental feature and might change at any time
-(Use `node --trace-warnings ...` to show where the warning was created)
-Expo push receipt failed { receiptId: 'receipt-aaa', code: 'DeviceNotRegistered' }
-PASS: inbox/outbox atomicity, recipient exclusion, job ticket, receipt invalidation

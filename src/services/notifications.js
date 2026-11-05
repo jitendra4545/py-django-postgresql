@@ -1,4 +1,3 @@
-import { createSharedNotification } from './shared-storage.js';
 import { query, transaction } from '../db/pool.js';
 import { emitToUser } from './realtime.js';
 
@@ -6,14 +5,19 @@ import { emitToUser } from './realtime.js';
 // the database-backed worker, so a Node restart cannot silently lose it.
 export const notifyUser = async ({ userId, type, title, body, data = {} }, connection = null) => {
   const persist = async (executor) => {
-    const notificationId = await createSharedNotification(executor, { userId, type, title, body, data });
+    const [result] = await executor.execute(
+      `INSERT INTO app_notifications
+        (user_id, type, title, body, data, created_at)
+       VALUES (?, ?, ?, ?, ?, NOW())`,
+      [userId, type, title, body, JSON.stringify(data)],
+    );
     await executor.execute(
       `INSERT INTO app_push_delivery_jobs
          (notification_id,user_id,status,next_attempt_at,created_at,updated_at)
        VALUES (?,?,'PENDING',NOW(),NOW(),NOW())`,
-      [notificationId, userId],
+      [result.insertId, userId],
     );
-    return notificationId;
+    return result.insertId;
   };
   // Outside a caller-owned transaction, use a single transaction for inbox+outbox.
   const id = connection ? await persist(connection) : await transaction(persist);
@@ -45,7 +49,7 @@ export const notifyBookingAudience = async (
       WHERE r.id = ?
      UNION
      SELECT DISTINCT d.user_id
-       FROM dl_mobile_driver_assignments ada
+       FROM app_driver_assignments ada
        JOIN drivers d ON d.id = ada.driver_id
       WHERE ada.reservation_id = ? AND ada.status NOT IN ('DECLINED','CANCELLED')`,
     [reservationId, reservationId, reservationId],

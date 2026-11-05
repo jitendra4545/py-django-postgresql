@@ -1,4 +1,3 @@
-import { createSharedManualRequest } from '../services/shared-storage.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../common/async-handler.js';
@@ -339,7 +338,7 @@ router.get(
             dates.firstServiceDate, dates.lastServiceDate,
             costs.totalAmount, arm.currency_code AS currency
        FROM reservations r
-       JOIN dl_mobile_reservation_meta arm ON arm.reservation_id = r.id
+       JOIN app_reservation_meta arm ON arm.reservation_id = r.id
        LEFT JOIN (
          SELECT reservation_id, MIN(pick_up_date) AS firstServiceDate,
                 MAX(drop_off_date) AS lastServiceDate
@@ -354,7 +353,7 @@ router.get(
       [...params, perPage, offset],
     );
     const count = await one(
-      `SELECT COUNT(*) AS total FROM reservations r JOIN dl_mobile_reservation_meta arm ON arm.reservation_id=r.id WHERE ${where}`,
+      `SELECT COUNT(*) AS total FROM reservations r JOIN app_reservation_meta arm ON arm.reservation_id=r.id WHERE ${where}`,
       params,
     );
     response.json(pageResponse(items, Number(count.total), page, perPage));
@@ -401,7 +400,7 @@ router.post(
         ],
       );
       await connection.execute(
-        `UPDATE reservations SET mobile_legacy_status=status, mobile_lifecycle_status='CHANGE_REQUESTED',mobile_updated_at=NOW() WHERE id=?`,
+        `UPDATE app_reservation_meta SET lifecycle_status='CHANGE_REQUESTED',updated_at=NOW() WHERE reservation_id=?`,
         [request.params.reservationId],
       );
       await connection.execute(
@@ -440,7 +439,7 @@ router.post(
         ],
       );
       await connection.execute(
-        `UPDATE reservations SET mobile_legacy_status=status, mobile_lifecycle_status='CANCELLATION_REQUESTED',mobile_updated_at=NOW() WHERE id=?`,
+        `UPDATE app_reservation_meta SET lifecycle_status='CANCELLATION_REQUESTED',updated_at=NOW() WHERE reservation_id=?`,
         [request.params.reservationId],
       );
       await connection.execute(
@@ -471,13 +470,20 @@ router.post(
       request.auth.role === ROLES.CLIENT ? request.auth.customerId : request.body.customerId;
     if (!customerId) throw notFound('A client must be selected');
     await assertCustomerAccess(request.auth, customerId);
-    const result = await transaction((connection) => createSharedManualRequest(connection, {
-      kind: 'AIRPORT_VIP', customerId, agencyId: request.auth.agencyId ?? null,
-      userId: request.auth.userId, airport: request.body.airport, terminal: request.body.terminal,
-      serviceAt: request.body.serviceAt.slice(0, 19).replace('T', ' '),
-      passengerCount: request.body.passengerCount, flightNumber: request.body.flightNumber,
-      requestText: request.body.requestText,
-    }));
+    const result = await query(
+      `INSERT INTO app_vip_requests (customer_id, agency_id, created_by_user_id, airport, terminal, service_at, passenger_count, flight_number, request_text, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'SUBMITTED', NOW(), NOW())`,
+      [
+        customerId,
+        request.auth.agencyId ?? null,
+        request.auth.userId,
+        request.body.airport,
+        request.body.terminal ?? null,
+        request.body.serviceAt.slice(0, 19).replace('T', ' '),
+        request.body.passengerCount,
+        request.body.flightNumber ?? null,
+        request.body.requestText ?? null,
+      ],
+    );
     response.status(201).json({ id: result.insertId, status: 'SUBMITTED' });
   }),
 );
@@ -498,7 +504,7 @@ router.get(
       `SELECT id,customer_id AS customerId,airport,terminal,service_at AS serviceAt,
               passenger_count AS passengerCount,flight_number AS flightNumber,request_text AS requestText,
               status,operations_note AS operationsNote,created_at AS createdAt
-         FROM dl_mobile_vip_requests WHERE ${clause} ORDER BY created_at DESC LIMIT 200`,
+         FROM app_vip_requests WHERE ${clause} ORDER BY created_at DESC LIMIT 200`,
       params,
     );
     response.json({ items });
@@ -521,12 +527,18 @@ router.post(
       request.auth.role === ROLES.CLIENT ? request.auth.customerId : request.body.customerId;
     if (!customerId) throw notFound('A client must be selected');
     await assertCustomerAccess(request.auth, customerId);
-    const result = await transaction((connection) => createSharedManualRequest(connection, {
-      kind: 'CONCIERGE', customerId, agencyId: request.auth.agencyId ?? null,
-      userId: request.auth.userId, category: request.body.category, city: request.body.city,
-      requestedFor: request.body.requestedFor?.slice(0, 19).replace('T', ' ') ?? null,
-      requestText: request.body.requestText,
-    }));
+    const result = await query(
+      `INSERT INTO app_concierge_requests (customer_id, agency_id, created_by_user_id, category, requested_for, city, request_text, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'SUBMITTED', NOW(), NOW())`,
+      [
+        customerId,
+        request.auth.agencyId ?? null,
+        request.auth.userId,
+        request.body.category,
+        request.body.requestedFor?.slice(0, 19).replace('T', ' ') ?? null,
+        request.body.city ?? null,
+        request.body.requestText,
+      ],
+    );
     response.status(201).json({ id: result.insertId, status: 'SUBMITTED' });
   }),
 );
@@ -546,7 +558,7 @@ router.get(
     const items = await query(
       `SELECT id,customer_id AS customerId,category,requested_for AS requestedFor,city,
               request_text AS requestText,status,operations_note AS operationsNote,created_at AS createdAt
-         FROM dl_mobile_concierge_requests WHERE ${clause} ORDER BY created_at DESC LIMIT 200`,
+         FROM app_concierge_requests WHERE ${clause} ORDER BY created_at DESC LIMIT 200`,
       params,
     );
     response.json({ items });

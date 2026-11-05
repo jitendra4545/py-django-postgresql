@@ -1,5 +1,3 @@
-> **Historical reference (migrations 001-007).** Release 2.4.0 retires eight active app stores in favor of client tables. Use [SHARED_DATABASE_CONSOLIDATION.md](SHARED_DATABASE_CONSOLIDATION.md) for current storage and the root deployment guide for migration. Do not create or resume writes to the retired stores from this historical document.
-
 # Database compatibility and Release 1 changes
 
 ## Compatibility strategy

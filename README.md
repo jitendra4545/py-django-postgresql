@@ -1,5 +1,3 @@
-> **Shared database release 2.4.0:** Start with [START_HERE_SHARED_DATABASE.md](START_HERE_SHARED_DATABASE.md) before deployment. This package requires migration 008 and a staged cutover with both PHP and Node writes stopped. Existing API contracts are preserved; real database/frontend acceptance remains required. The historical setup notes below do not replace the new migration sequence.
-
 # Drive Luxury Backend — Release 1
 
 Production-oriented Express 5 / MySQL API for:

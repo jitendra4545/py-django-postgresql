@@ -1,4 +1,3 @@
-import { setLegMetadata, legacyText } from './shared-storage.js';
 import Decimal from 'decimal.js';
 import { AppError } from '../common/errors.js';
 import { calculateQuote } from './pricing.js';
@@ -39,7 +38,7 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
   const [reservations] = await connection.execute(
     `SELECT r.*,arm.service_code,arm.lifecycle_status
        FROM reservations r
-       JOIN dl_mobile_reservation_meta arm ON arm.reservation_id=r.id
+       JOIN app_reservation_meta arm ON arm.reservation_id=r.id
       WHERE r.id=? FOR UPDATE`,
     [changeRequest.reservation_id],
   );
@@ -50,10 +49,6 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
     [reservation.id],
   );
   const draft = draftRows[0];
-  if (!draft) {
-    throw new AppError(409, 'LEGACY_BOOKING_REVIEW_REQUIRED',
-      'This website booking has no mobile pricing snapshot; Operations must review the change in the existing booking system');
-  }
   const draftDetails = parseJson(draft?.details);
   const optionSelections = changes.options ?? draftDetails.options ?? [];
 
@@ -61,7 +56,7 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
     `SELECT rd.*,rlm.vehicle_class_id,rlm.pickup_details,rlm.dropoff_details,
             rlm.passenger_count,rlm.luggage_count,rlm.flight_number
        FROM reservation_details rd
-       JOIN dl_mobile_reservation_leg_meta rlm ON rlm.reservation_details_id=rd.id
+       JOIN app_reservation_leg_meta rlm ON rlm.reservation_details_id=rd.id
       WHERE rd.reservation_id=? AND rd.deleted_at IS NULL
       ORDER BY rlm.sequence_no FOR UPDATE`,
     [reservation.id],
@@ -197,8 +192,8 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
         days,
         (requested.isHourly ?? Boolean(row.is_hourly)) ? 1 : 0,
         distanceKm ?? row.approximate_distance,
-        legacyText(pickup.address),
-        legacyText(dropoff?.address),
+        pickup.address,
+        dropoff?.address ?? null,
         sqlDate(startAt),
         sqlDate(endAt),
         sqlTime(startAt),
@@ -214,12 +209,21 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
         row.id,
       ],
     );
-    await setLegMetadata(connection, {
-      reservationId: reservation.id, detailId: row.id, vehicleClassId,
-      passengerCount: passenger.count ?? row.passenger_count,
-      luggageCount: passenger.luggageCount ?? row.luggage_count,
-      pickup, dropoff, flightNumber: passenger.flightNumber ?? row.flight_number,
-    });
+    await connection.execute(
+      `UPDATE app_reservation_leg_meta
+          SET vehicle_class_id=?,passenger_count=?,luggage_count=?,pickup_details=?,dropoff_details=?,
+              flight_number=?,updated_at=NOW()
+        WHERE reservation_details_id=?`,
+      [
+        vehicleClassId,
+        passenger.count ?? row.passenger_count,
+        passenger.luggageCount ?? row.luggage_count,
+        JSON.stringify(pickup),
+        JSON.stringify(dropoff ?? {}),
+        passenger.flightNumber ?? row.flight_number,
+        row.id,
+      ],
+    );
 
     if (requested.stops || Object.hasOwn(requested, 'dropoff')) {
       await connection.execute(
@@ -231,17 +235,16 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
         await connection.execute(
           `INSERT INTO reservation_itineraries
             (reservation_id,reservation_details_id,reservation_date,full_address,country_id,city,
-             distance,duration,status,sort_numer,created_at,updated_at,mobile_full_address)
-           VALUES (?,?,?,?,?,?,0,0,1,?,NOW(),NOW(),?)`,
+             distance,duration,status,sort_numer,created_at,updated_at)
+           VALUES (?,?,?,?,?,?,0,0,1,?,NOW(),NOW())`,
           [
             reservation.id,
             row.id,
             sqlDate(startAt),
-            legacyText(stop.address),
+            stop.address,
             stop.countryId ?? null,
             stop.city ?? null,
             index + 1,
-            stop.address,
           ],
         );
       }
@@ -407,7 +410,8 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
 
   if (requiresReassignment) {
     await connection.execute(
-      `UPDATE reservation_drivers SET mobile_assignment_status='CANCELLED',mobile_updated_at=NOW(), status=2, updated_at=NOW() WHERE reservation_id=? AND COALESCE(mobile_assignment_status,CASE WHEN status=1 THEN 'OFFERED' ELSE 'CANCELLED' END) NOT IN ('COMPLETED','CANCELLED')`,
+      `UPDATE app_driver_assignments SET status='CANCELLED',updated_at=NOW()
+        WHERE reservation_id=? AND status NOT IN ('COMPLETED','CANCELLED')`,
       [reservation.id],
     );
   }

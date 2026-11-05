@@ -1,4 +1,3 @@
-import { normalizeJsonRows } from './json-contract.js';
 import fs from 'node:fs';
 import mysql from 'mysql2/promise';
 import { env } from '../config/env.js';
@@ -29,7 +28,7 @@ export const pool = mysql.createPool({
 
 export const query = async (sql, params = []) => {
   const [rows] = await pool.execute(sql, params);
-  return normalizeJsonRows(rows);
+  return rows;
 };
 
 export const one = async (sql, params = []) => {

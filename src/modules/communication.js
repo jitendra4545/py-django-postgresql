@@ -1,4 +1,3 @@
-import { createSharedMessage, sharedMessageVisibility, markSharedMessagesRead } from '../services/shared-storage.js';
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
@@ -49,16 +48,16 @@ router.get(
               r.reservation_no AS reservationNo,
               lm.id AS lastMessageId,lm.message_type AS lastMessageType,
               lm.body AS lastMessageBody,lm.created_at AS lastMessageAt,
-              (SELECT COUNT(*) FROM dl_mobile_messages unread
-                WHERE unread.conversation_id=c.id AND unread.deleted_at IS NULL AND ${sharedMessageVisibility('unread', request.auth)}
+              (SELECT COUNT(*) FROM app_messages unread
+                WHERE unread.conversation_id=c.id AND unread.deleted_at IS NULL
                   AND unread.sender_user_id<>?
                   AND (cp.last_read_at IS NULL OR unread.created_at>cp.last_read_at)) AS unreadCount
          FROM app_conversation_participants cp
          JOIN app_conversations c ON c.id=cp.conversation_id
          JOIN reservations r ON r.id=c.reservation_id
-         LEFT JOIN dl_mobile_messages lm ON lm.id=(
-           SELECT m2.id FROM dl_mobile_messages m2
-            WHERE m2.conversation_id=c.id AND m2.deleted_at IS NULL AND ${sharedMessageVisibility('m2', request.auth)}
+         LEFT JOIN app_messages lm ON lm.id=(
+           SELECT m2.id FROM app_messages m2
+            WHERE m2.conversation_id=c.id AND m2.deleted_at IS NULL
             ORDER BY m2.created_at DESC,m2.id DESC LIMIT 1
          )
         WHERE cp.user_id=? AND cp.left_at IS NULL
@@ -85,19 +84,18 @@ router.post(
       );
       let conversationId = existingRows[0]?.id;
       if (!conversationId) {
-        await connection.execute(
-          `INSERT INTO app_conversations (reservation_id,status,created_at,updated_at) VALUES (?,'ACTIVE',NOW(),NOW())
-           ON DUPLICATE KEY UPDATE id=id`, [reservation.id],
+        const [created] = await connection.execute(
+          `INSERT INTO app_conversations (reservation_id,status,created_at,updated_at) VALUES (?,'ACTIVE',NOW(),NOW())`,
+          [reservation.id],
         );
-        const [current] = await connection.execute('SELECT id FROM app_conversations WHERE reservation_id=?', [reservation.id]);
-        conversationId = current[0].id;
+        conversationId = created.insertId;
       }
       await connection.execute(
         `INSERT IGNORE INTO app_conversation_participants (conversation_id,user_id,participant_role,joined_at) SELECT ?,u.id,'CLIENT',NOW() FROM customers c JOIN users u ON u.id=c.user_id WHERE c.id=?`,
         [conversationId, reservation.customer_id],
       );
       await connection.execute(
-        `INSERT IGNORE INTO app_conversation_participants (conversation_id,user_id,participant_role,joined_at) SELECT ?,d.user_id,'CHAUFFEUR',NOW() FROM dl_mobile_driver_assignments ada JOIN drivers d ON d.id=ada.driver_id WHERE ada.reservation_id=? AND ada.status NOT IN ('DECLINED','CANCELLED')`,
+        `INSERT IGNORE INTO app_conversation_participants (conversation_id,user_id,participant_role,joined_at) SELECT ?,d.user_id,'CHAUFFEUR',NOW() FROM app_driver_assignments ada JOIN drivers d ON d.id=ada.driver_id WHERE ada.reservation_id=? AND ada.status NOT IN ('DECLINED','CANCELLED')`,
         [conversationId, reservation.id],
       );
       await connection.execute(
@@ -126,11 +124,11 @@ router.get(
     await assertParticipant(request.auth, request.params.conversationId);
     const { page, perPage, offset } = pagination(request.query);
     const items = await query(
-      `SELECT m.id,m.sender_user_id AS senderUserId,u.full_name AS senderName,m.message_type AS messageType,m.body,m.document_id AS documentId,m.created_at AS createdAt FROM dl_mobile_messages m JOIN users u ON u.id=m.sender_user_id WHERE m.conversation_id=? AND m.deleted_at IS NULL AND ${sharedMessageVisibility('m', request.auth)} ORDER BY m.created_at DESC LIMIT ? OFFSET ?`,
+      `SELECT m.id,m.sender_user_id AS senderUserId,u.full_name AS senderName,m.message_type AS messageType,m.body,m.document_id AS documentId,m.created_at AS createdAt FROM app_messages m JOIN users u ON u.id=m.sender_user_id WHERE m.conversation_id=? AND m.deleted_at IS NULL ORDER BY m.created_at DESC LIMIT ? OFFSET ?`,
       [request.params.conversationId, perPage, offset],
     );
     const total = await one(
-      `SELECT COUNT(*) AS total FROM dl_mobile_messages m WHERE conversation_id=? AND deleted_at IS NULL AND ${sharedMessageVisibility('m', request.auth)}`,
+      'SELECT COUNT(*) AS total FROM app_messages WHERE conversation_id=? AND deleted_at IS NULL',
       [request.params.conversationId],
     );
     response.json(pageResponse(items.reverse(), Number(total.total), page, perPage));
@@ -144,10 +142,10 @@ router.post(
     await assertParticipant(request.auth, request.params.conversationId);
     const lastMessage = await one(
       request.body.lastMessageId
-        ? `SELECT id,created_at AS createdAt FROM dl_mobile_messages m
-            WHERE id=? AND conversation_id=? AND deleted_at IS NULL AND ${sharedMessageVisibility('m', request.auth)}`
-        : `SELECT id,created_at AS createdAt FROM dl_mobile_messages m
-            WHERE conversation_id=? AND deleted_at IS NULL AND ${sharedMessageVisibility('m', request.auth)}
+        ? `SELECT id,created_at AS createdAt FROM app_messages
+            WHERE id=? AND conversation_id=? AND deleted_at IS NULL`
+        : `SELECT id,created_at AS createdAt FROM app_messages
+            WHERE conversation_id=? AND deleted_at IS NULL
             ORDER BY created_at DESC,id DESC LIMIT 1`,
       request.body.lastMessageId
         ? [request.body.lastMessageId, request.params.conversationId]
@@ -163,9 +161,6 @@ router.post(
         WHERE conversation_id=? AND user_id=? AND left_at IS NULL`,
       [readAt, request.params.conversationId, request.auth.userId],
     );
-    await transaction((connection) => markSharedMessagesRead(connection, {
-      conversationId: request.params.conversationId, userId: request.auth.userId, readAt,
-    }));
     emitToConversation(request.params.conversationId, 'conversation.read', {
       conversationId: Number(request.params.conversationId),
       userId: request.auth.userId,
@@ -220,11 +215,16 @@ router.post(
       }
     }
     const result = await transaction(async (connection) => {
-      const created = await createSharedMessage(connection, {
-        reservationId: conversation.reservationId, conversationId: conversation.id,
-        userId: request.auth.userId, messageType: request.body.messageType,
-        body: request.body.body?.trim() ?? null, documentId: request.body.documentId ?? null,
-      });
+      const [created] = await connection.execute(
+        `INSERT INTO app_messages (conversation_id,sender_user_id,message_type,body,document_id,created_at) VALUES (?,?,?,?,?,NOW())`,
+        [
+          conversation.id,
+          request.auth.userId,
+          request.body.messageType,
+          request.body.body?.trim() ?? null,
+          request.body.documentId ?? null,
+        ],
+      );
       await connection.execute('UPDATE app_conversations SET updated_at=NOW() WHERE id=?', [
         conversation.id,
       ]);
@@ -306,7 +306,7 @@ router.post(
       ]);
     } else if (recipientRole === 'CHAUFFEUR') {
       recipient = await one(
-        `SELECT d.phone FROM dl_mobile_driver_assignments ada JOIN drivers d ON d.id=ada.driver_id
+        `SELECT d.phone FROM app_driver_assignments ada JOIN drivers d ON d.id=ada.driver_id
           WHERE ada.reservation_id=? AND ada.status NOT IN ('DECLINED','CANCELLED','COMPLETED','NO_SHOW')
           ORDER BY ada.updated_at DESC LIMIT 1`,
         [reservation.id],
