@@ -55,6 +55,13 @@ const required = {
     'agency_id',
     'status',
     'payment_status',
+    'service_code',
+    'source_channel',
+    'created_by_user_id',
+    'created_by_agent_id',
+    'lifecycle_status',
+    'currency_code',
+    'quote_snapshot_id',
     'deleted_at',
   ],
   reservation_details: [

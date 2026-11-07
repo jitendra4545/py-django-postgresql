@@ -1,3 +1,7 @@
+> **2026-11-06 second update:** migration 009 now stores mobile leg and driver assignment metadata on original `reservation_details` / `reservation_drivers` rows, retaining archived app extension tables. Read [RESERVATION_LEG_AND_DRIVER_CONSOLIDATION.md](RESERVATION_LEG_AND_DRIVER_CONSOLIDATION.md) for current architecture and deployment cautions. The remaining document records the **historical Release 1 design**, not the current runtime table map.
+
+> **2026-11-06 update:** `app_reservation_meta` below describes the historical extension table. The updated runtime now stores its seven mobile attributes directly on the existing `reservations` row after migration 008. See [RESERVATIONS_SINGLE_TABLE_CONSOLIDATION.md](RESERVATIONS_SINGLE_TABLE_CONSOLIDATION.md). The historical migration file is unchanged to retain checksum compatibility.
+
 # Database compatibility and Release 1 changes
 
 ## Compatibility strategy

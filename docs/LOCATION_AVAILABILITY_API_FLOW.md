@@ -130,6 +130,6 @@ the Chauffeur, assigns the confirmed booking, and the app then uses:
 | Client default country/city            | `customers.country_id`, `customers.city`                                                               |
 | Unfinished booking form                | `app_booking_drafts.details` JSON                                                                      |
 | Reservation pickup/drop-off IDs        | `reservation_details.pick_up_country_id`, `pick_up_city_id`, `drop_off_country_id`, `drop_off_city_id` |
-| Full selected location object          | `app_reservation_leg_meta.pickup_details`, `dropoff_details` JSON                                      |
+| Full selected location object          | `reservation_details.pickup_details`, `dropoff_details` JSON (after migration 009)                                      |
 
 No new location table is required for Release 1.

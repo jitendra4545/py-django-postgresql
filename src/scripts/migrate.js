@@ -3,16 +3,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pool } from '../db/pool.js';
+import { splitMigrationStatements } from './split-migration-sql.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const migrationDirectory = path.join(root, 'migrations');
 const checksum = (content) => crypto.createHash('sha256').update(content).digest('hex');
 
-const splitStatements = (sql) =>
-  sql
-    .split(/;\s*(?:\r?\n|$)/)
-    .map((item) => item.trim())
-    .filter(Boolean);
 
 const connection = await pool.getConnection();
 try {
@@ -36,7 +32,7 @@ try {
     }
     await connection.beginTransaction();
     try {
-      for (const statement of splitStatements(content)) await connection.query(statement);
+      for (const statement of splitMigrationStatements(content)) await connection.query(statement);
       await connection.execute(
         'INSERT INTO app_schema_migrations (filename,checksum) VALUES (?,?)',
         [filename, digest],

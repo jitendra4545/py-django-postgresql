@@ -1,4 +1,7 @@
+import { recordBookingStatusEvent } from '../services/mobile-status-events.js';
+import { addMobileDriverExpense } from '../services/mobile-driver-expenses.js';
 import { Router } from 'express';
+import { MOBILE_DRIVER_ASSIGNMENTS } from '../services/driver-assignment-storage.js';
 import { z } from 'zod';
 import { asyncHandler } from '../common/async-handler.js';
 import { requireAuth, requireRoles } from '../common/auth.js';
@@ -22,17 +25,26 @@ const assignmentFor = async (auth, assignmentId, connection = null, lock = false
     execute: (sql, params) => query(sql, params).then((rows) => [rows]),
   };
   const [rows] = await executor.execute(
-    `SELECT ada.*, r.reservation_no, rd.pick_up_location, rd.drop_off_location,
+    `SELECT ada.mobile_assignment_id AS id, ada.reservation_id,
+            ada.reservation_details_id,
+            ada.mobile_legacy_reservation_driver_id AS legacy_reservation_driver_id,
+            ada.mobile_driver_id AS driver_id,
+            ada.mobile_assignment_status AS status,
+            ada.scheduled_start_at, ada.scheduled_end_at,
+            ada.acknowledged_at, ada.declined_at, ada.decline_reason,
+            ada.started_at, ada.completed_at, ada.assigned_by_user_id,
+            ada.created_at, ada.updated_at,
+            r.reservation_no, rd.pick_up_location, rd.drop_off_location,
             rd.pick_up_date, rd.pick_up_time, rd.drop_off_date, rd.drop_off_time,
             r.customer_id, c.full_name AS customer_name,
             rlm.pickup_details, rlm.dropoff_details, rlm.passenger_count, rlm.luggage_count,
             rlm.flight_number
-       FROM app_driver_assignments ada
+       FROM reservation_drivers ada
        JOIN reservations r ON r.id=ada.reservation_id
        JOIN reservation_details rd ON rd.id=ada.reservation_details_id
-       JOIN app_reservation_leg_meta rlm ON rlm.reservation_details_id=rd.id
+       JOIN reservation_details rlm ON rlm.id=rd.id AND rlm.sequence_no IS NOT NULL
        JOIN customers c ON c.id=r.customer_id
-      WHERE ada.id=? AND ada.driver_id=? ${lock ? 'FOR UPDATE' : ''}`,
+      WHERE ada.mobile_assignment_id=? AND ada.mobile_driver_id=? ${lock ? 'FOR UPDATE' : ''}`,
     [assignmentId, auth.driverId],
   );
   if (!rows[0]) throw notFound('Assignment not found');
@@ -111,15 +123,15 @@ router.get(
   asyncHandler(async (request, response) => {
     const [today, upcoming, summary] = await Promise.all([
       query(
-        `SELECT ada.id,ada.reservation_id AS reservationId,ada.status,ada.scheduled_start_at AS scheduledStartAt,rd.pick_up_location AS pickupAddress,rd.drop_off_location AS dropoffAddress,c.full_name AS customerName FROM app_driver_assignments ada JOIN reservation_details rd ON rd.id=ada.reservation_details_id JOIN reservations r ON r.id=ada.reservation_id JOIN customers c ON c.id=r.customer_id WHERE ada.driver_id=? AND DATE(ada.scheduled_start_at)=CURRENT_DATE AND ada.status NOT IN ('DECLINED','CANCELLED') ORDER BY ada.scheduled_start_at`,
+        `SELECT ada.id,ada.reservation_id AS reservationId,ada.status,ada.scheduled_start_at AS scheduledStartAt,rd.pick_up_location AS pickupAddress,rd.drop_off_location AS dropoffAddress,c.full_name AS customerName FROM ${MOBILE_DRIVER_ASSIGNMENTS} ada JOIN reservation_details rd ON rd.id=ada.reservation_details_id JOIN reservations r ON r.id=ada.reservation_id JOIN customers c ON c.id=r.customer_id WHERE ada.driver_id=? AND DATE(ada.scheduled_start_at)=CURRENT_DATE AND ada.status NOT IN ('DECLINED','CANCELLED') ORDER BY ada.scheduled_start_at`,
         [request.auth.driverId],
       ),
       query(
-        `SELECT ada.id,ada.reservation_id AS reservationId,ada.status,ada.scheduled_start_at AS scheduledStartAt,rd.pick_up_location AS pickupAddress FROM app_driver_assignments ada JOIN reservation_details rd ON rd.id=ada.reservation_details_id WHERE ada.driver_id=? AND DATE(ada.scheduled_start_at)>CURRENT_DATE AND ada.status NOT IN ('DECLINED','CANCELLED') ORDER BY ada.scheduled_start_at LIMIT 10`,
+        `SELECT ada.id,ada.reservation_id AS reservationId,ada.status,ada.scheduled_start_at AS scheduledStartAt,rd.pick_up_location AS pickupAddress FROM ${MOBILE_DRIVER_ASSIGNMENTS} ada JOIN reservation_details rd ON rd.id=ada.reservation_details_id WHERE ada.driver_id=? AND DATE(ada.scheduled_start_at)>CURRENT_DATE AND ada.status NOT IN ('DECLINED','CANCELLED') ORDER BY ada.scheduled_start_at LIMIT 10`,
         [request.auth.driverId],
       ),
       one(
-        `SELECT COUNT(CASE WHEN status='COMPLETED' AND DATE(updated_at)=CURRENT_DATE THEN 1 END) AS completedToday,COUNT(CASE WHEN status NOT IN ('COMPLETED','DECLINED','CANCELLED','NO_SHOW') AND DATE(scheduled_start_at)=CURRENT_DATE THEN 1 END) AS remainingToday FROM app_driver_assignments WHERE driver_id=?`,
+        `SELECT COUNT(CASE WHEN status='COMPLETED' AND DATE(updated_at)=CURRENT_DATE THEN 1 END) AS completedToday,COUNT(CASE WHEN status NOT IN ('COMPLETED','DECLINED','CANCELLED','NO_SHOW') AND DATE(scheduled_start_at)=CURRENT_DATE THEN 1 END) AS remainingToday FROM ${MOBILE_DRIVER_ASSIGNMENTS} mobile_assignment WHERE driver_id=?`,
         [request.auth.driverId],
       ),
     ]);
@@ -137,23 +149,24 @@ router.get(
 router.post(
   '/assignments/:assignmentId/acknowledge',
   asyncHandler(async (request, response) => {
-    const assignment = await assignmentFor(request.auth, request.params.assignmentId);
-    const changed = assertAssignmentTransition(assignment.status, 'ACKNOWLEDGED');
-    if (changed) {
-      await query(
-        `UPDATE app_driver_assignments SET status='ACKNOWLEDGED',acknowledged_at=NOW(),updated_at=NOW() WHERE id=?`,
-        [assignment.id],
-      );
-      await query(
-        `INSERT INTO app_booking_status_events (reservation_id,reservation_details_id,assignment_id,status,actor_user_id,occurred_at,created_at) VALUES (?,?,?,'ACKNOWLEDGED',?,NOW(),NOW())`,
-        [
-          assignment.reservation_id,
-          assignment.reservation_details_id,
-          assignment.id,
-          request.auth.userId,
-        ],
-      );
-    }
+    const assignment = await transaction(async (connection) => {
+      const item = await assignmentFor(request.auth, request.params.assignmentId, connection, true);
+      const changed = assertAssignmentTransition(item.status, 'ACKNOWLEDGED');
+      if (changed) {
+        await connection.execute(
+          `UPDATE reservation_drivers SET mobile_assignment_status='ACKNOWLEDGED',acknowledged_at=NOW(),updated_at=NOW() WHERE mobile_assignment_id=?`,
+          [item.id],
+        );
+        await recordBookingStatusEvent(connection, {
+          reservationId: item.reservation_id,
+          reservationDetailsId: item.reservation_details_id,
+          assignmentId: item.id,
+          status: 'ACKNOWLEDGED',
+          actorUserId: request.auth.userId,
+        });
+      }
+      return item;
+    });
     response.json({ id: assignment.id, status: 'ACKNOWLEDGED' });
   }),
 );
@@ -162,22 +175,23 @@ router.post(
   '/assignments/:assignmentId/decline',
   validate(z.object({ reason: z.string().min(5).max(1000) })),
   asyncHandler(async (request, response) => {
-    const assignment = await assignmentFor(request.auth, request.params.assignmentId);
-    assertAssignmentTransition(assignment.status, 'DECLINED');
-    await query(
-      `UPDATE app_driver_assignments SET status='DECLINED',declined_at=NOW(),decline_reason=?,updated_at=NOW() WHERE id=?`,
-      [request.body.reason, assignment.id],
-    );
-    await query(
-      `INSERT INTO app_booking_status_events (reservation_id,reservation_details_id,assignment_id,status,actor_user_id,note,occurred_at,created_at) VALUES (?,?,?,'DECLINED',?,?,NOW(),NOW())`,
-      [
-        assignment.reservation_id,
-        assignment.reservation_details_id,
-        assignment.id,
-        request.auth.userId,
-        request.body.reason,
-      ],
-    );
+    const assignment = await transaction(async (connection) => {
+      const item = await assignmentFor(request.auth, request.params.assignmentId, connection, true);
+      assertAssignmentTransition(item.status, 'DECLINED');
+      await connection.execute(
+        `UPDATE reservation_drivers SET mobile_assignment_status='DECLINED',declined_at=NOW(),decline_reason=?,updated_at=NOW() WHERE mobile_assignment_id=?`,
+        [request.body.reason, item.id],
+      );
+      await recordBookingStatusEvent(connection, {
+        reservationId: item.reservation_id,
+        reservationDetailsId: item.reservation_details_id,
+        assignmentId: item.id,
+        status: 'DECLINED',
+        actorUserId: request.auth.userId,
+        note: request.body.reason,
+      });
+      return item;
+    });
     response.json({ id: assignment.id, status: 'DECLINED' });
   }),
 );
@@ -216,29 +230,26 @@ router.post(
       if (!changed) return { ...assignment, notificationChanged: false };
       const occurredAt = request.body.occurredAt?.slice(0, 19).replace('T', ' ') ?? null;
       await connection.execute(
-        `UPDATE app_driver_assignments SET status=?,started_at=IF(?='ON_THE_WAY',COALESCE(started_at,NOW()),started_at),completed_at=IF(?='COMPLETED',NOW(),completed_at),updated_at=NOW() WHERE id=?`,
+        `UPDATE reservation_drivers SET mobile_assignment_status=?,started_at=IF(?='ON_THE_WAY',COALESCE(started_at,NOW()),started_at),completed_at=IF(?='COMPLETED',NOW(),completed_at),updated_at=NOW() WHERE mobile_assignment_id=?`,
         [request.body.status, request.body.status, request.body.status, assignment.id],
       );
       await connection.execute(
-        `UPDATE app_reservation_leg_meta SET status=?,updated_at=NOW() WHERE reservation_details_id=?`,
+        `UPDATE reservation_details SET mobile_leg_status=?,updated_at=NOW() WHERE id=?`,
         [request.body.status, assignment.reservation_details_id],
       );
-      await connection.execute(
-        `INSERT INTO app_booking_status_events (reservation_id,reservation_details_id,assignment_id,status,actor_user_id,note,latitude,longitude,occurred_at,created_at) VALUES (?,?,?,?,?,?,?,?,COALESCE(?,NOW()),NOW())`,
-        [
-          assignment.reservation_id,
-          assignment.reservation_details_id,
-          assignment.id,
-          request.body.status,
-          request.auth.userId,
-          request.body.note ?? null,
-          request.body.latitude ?? null,
-          request.body.longitude ?? null,
-          occurredAt,
-        ],
-      );
+      await recordBookingStatusEvent(connection, {
+        reservationId: assignment.reservation_id,
+        reservationDetailsId: assignment.reservation_details_id,
+        assignmentId: assignment.id,
+        status: request.body.status,
+        actorUserId: request.auth.userId,
+        note: request.body.note ?? null,
+        latitude: request.body.latitude ?? null,
+        longitude: request.body.longitude ?? null,
+        occurredAt,
+      });
       const [activeRows] = await connection.execute(
-        `SELECT COUNT(*) AS total FROM app_driver_assignments WHERE reservation_id=? AND status NOT IN ('COMPLETED','NO_SHOW','DECLINED','CANCELLED')`,
+        `SELECT COUNT(*) AS total FROM ${MOBILE_DRIVER_ASSIGNMENTS} mobile_assignment WHERE reservation_id=? AND status NOT IN ('COMPLETED','NO_SHOW','DECLINED','CANCELLED')`,
         [assignment.reservation_id],
       );
       const reservationStatus =
@@ -246,7 +257,7 @@ router.post(
           ? 'COMPLETED'
           : request.body.status;
       await connection.execute(
-        `UPDATE app_reservation_meta SET lifecycle_status=?,updated_at=NOW() WHERE reservation_id=?`,
+        `UPDATE reservations SET lifecycle_status=?,updated_at=NOW() WHERE id=?`,
         [reservationStatus, assignment.reservation_id],
       );
       if (reservationStatus === 'COMPLETED')
@@ -383,19 +394,20 @@ router.post(
   ),
   asyncHandler(async (request, response) => {
     const assignment = await assignmentFor(request.auth, request.params.assignmentId);
-    const result = await query(
-      `INSERT INTO app_driver_expenses (assignment_id,reservation_id,driver_id,category,amount,currency,description,document_id,status,incurred_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?, 'SUBMITTED',?,NOW(),NOW())`,
-      [
-        assignment.id,
-        assignment.reservation_id,
-        request.auth.driverId,
-        request.body.category,
-        request.body.amount,
-        request.body.currency,
-        request.body.description ?? null,
-        request.body.documentId ?? null,
-        request.body.incurredAt.slice(0, 19).replace('T', ' '),
-      ],
+    const result = await transaction((connection) =>
+      addMobileDriverExpense(connection, {
+        assignmentId: assignment.id,
+        reservationId: assignment.reservation_id,
+        reservationDetailsId: assignment.reservation_details_id,
+        driverId: request.auth.driverId,
+        submittedByUserId: request.auth.userId,
+        category: request.body.category,
+        amount: request.body.amount,
+        currency: request.body.currency,
+        description: request.body.description ?? null,
+        documentId: request.body.documentId ?? null,
+        incurredAt: request.body.incurredAt.slice(0, 19).replace('T', ' '),
+      }),
     );
     response.status(201).json({ id: result.insertId, status: 'SUBMITTED' });
   }),
@@ -411,12 +423,27 @@ router.post(
       latitude: z.number().min(-90).max(90).optional(),
       longitude: z.number().min(-180).max(180).optional(),
       documentIds: z.array(z.number().int().positive()).max(10).default([]),
+      vehicleDamageId: z.number().int().positive().optional(),
     }),
   ),
   asyncHandler(async (request, response) => {
     const assignment = await assignmentFor(request.auth, request.params.assignmentId);
+    if (request.body.vehicleDamageId != null) {
+      if (!['ACCIDENT', 'VEHICLE_ISSUE'].includes(request.body.type)) {
+        throw new AppError(422, 'INVALID_DAMAGE_LINK', 'Only vehicle-related incidents can link a damage report');
+      }
+      const damage = await one(
+        `SELECT id FROM reservation_vehicle_damages
+          WHERE id=? AND reservation_id=? AND reservation_details_id=? AND deleted_at IS NULL`,
+        [request.body.vehicleDamageId, assignment.reservation_id, assignment.reservation_details_id],
+      );
+      if (!damage) throw notFound('Vehicle damage report not found for this assignment');
+    }
     const result = await query(
-      `INSERT INTO app_incidents (assignment_id,reservation_id,reported_by_user_id,type,severity,description,latitude,longitude,document_ids,status,reported_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,'OPEN',NOW(),NOW(),NOW())`,
+      `INSERT INTO reservation_service_incidents
+         (assignment_id,reservation_id,reported_by_user_id,type,severity,description,
+          latitude,longitude,document_ids,status,reported_at,created_at,updated_at,vehicle_damage_id)
+       VALUES (?,?,?,?,?,?,?,?,?,'OPEN',NOW(),NOW(),NOW(),?)`,
       [
         assignment.id,
         assignment.reservation_id,
@@ -427,6 +454,7 @@ router.post(
         request.body.latitude ?? null,
         request.body.longitude ?? null,
         JSON.stringify(request.body.documentIds),
+        request.body.vehicleDamageId ?? null,
       ],
     );
     await notifyBookingAudience(assignment.reservation_id, {
@@ -444,11 +472,11 @@ router.get(
   asyncHandler(async (request, response) => {
     const { page, perPage, offset } = pagination(request.query);
     const items = await query(
-      `SELECT ada.id,ada.reservation_id AS reservationId,ada.status,ada.scheduled_start_at AS scheduledStartAt,ada.completed_at AS completedAt,rd.pick_up_location AS pickupAddress,rd.drop_off_location AS dropoffAddress,(COALESCE(rdv.pick_up_driver_cost,0)+COALESCE(rdv.drop_off_driver_cost,0)) AS earnings FROM app_driver_assignments ada JOIN reservation_details rd ON rd.id=ada.reservation_details_id LEFT JOIN reservation_drivers rdv ON rdv.id=ada.legacy_reservation_driver_id WHERE ada.driver_id=? AND ada.status IN ('COMPLETED','NO_SHOW','CANCELLED') ORDER BY ada.updated_at DESC LIMIT ? OFFSET ?`,
+      `SELECT ada.id,ada.reservation_id AS reservationId,ada.status,ada.scheduled_start_at AS scheduledStartAt,ada.completed_at AS completedAt,rd.pick_up_location AS pickupAddress,rd.drop_off_location AS dropoffAddress,(COALESCE(rdv.pick_up_driver_cost,0)+COALESCE(rdv.drop_off_driver_cost,0)) AS earnings FROM ${MOBILE_DRIVER_ASSIGNMENTS} ada JOIN reservation_details rd ON rd.id=ada.reservation_details_id LEFT JOIN reservation_drivers rdv ON rdv.id=ada.legacy_reservation_driver_id WHERE ada.driver_id=? AND ada.status IN ('COMPLETED','NO_SHOW','CANCELLED') ORDER BY ada.updated_at DESC LIMIT ? OFFSET ?`,
       [request.auth.driverId, perPage, offset],
     );
     const total = await one(
-      `SELECT COUNT(*) AS total FROM app_driver_assignments WHERE driver_id=? AND status IN ('COMPLETED','NO_SHOW','CANCELLED')`,
+      `SELECT COUNT(*) AS total FROM ${MOBILE_DRIVER_ASSIGNMENTS} mobile_assignment WHERE driver_id=? AND status IN ('COMPLETED','NO_SHOW','CANCELLED')`,
       [request.auth.driverId],
     );
     response.json(pageResponse(items, Number(total.total), page, perPage));

@@ -1,3 +1,4 @@
+import { MOBILE_DRIVER_ASSIGNMENTS } from './driver-assignment-storage.js';
 import { forbidden, notFound } from '../common/errors.js';
 import { ROLES } from '../config/constants.js';
 import { one } from '../db/pool.js';
@@ -21,7 +22,7 @@ export const getReservationForAccess = async (auth, reservationId) => {
   const reservation = await one(
     `SELECT r.*, arm.created_by_agent_id, arm.service_code, arm.lifecycle_status
        FROM reservations r
-       LEFT JOIN app_reservation_meta arm ON arm.reservation_id = r.id
+       LEFT JOIN reservations arm ON arm.id=r.id AND arm.service_code IS NOT NULL
       WHERE r.id = ? AND r.deleted_at IS NULL`,
     [reservationId],
   );
@@ -36,7 +37,7 @@ export const getReservationForAccess = async (auth, reservationId) => {
   }
   if (auth.role === ROLES.CHAUFFEUR) {
     const assignment = await one(
-      `SELECT id FROM app_driver_assignments
+      `SELECT id FROM ${MOBILE_DRIVER_ASSIGNMENTS} mobile_assignment
         WHERE reservation_id = ? AND driver_id = ? AND status NOT IN ('DECLINED','CANCELLED')`,
       [reservationId, auth.driverId],
     );

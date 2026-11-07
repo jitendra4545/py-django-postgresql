@@ -16,6 +16,7 @@
     "audit:prune": "node src/scripts/prune-api-audit.js",
     "audit:selftest": "node --test scripts/selftest-api-audit.mjs",
     "verify:schema": "node src/scripts/verify-legacy-schema.js",
+    "reservation:storage-check": "node --test scripts/selftest-reservation-storage.mjs",
     "syntax:check": "node scripts/check-syntax.js && node scripts/check-openapi.js",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -29,7 +30,13 @@
     "notifications:selftest": "node --experimental-test-module-mocks scripts/selftest-expo-notifications.mjs",
     "telnyx:check": "node scripts/check-telnyx-integration.js",
     "pricing:selftest": "node scripts/selftest-pricing-parity.mjs",
-    "pricing:integration-selftest": "node scripts/selftest-pricing-integration.mjs"
+    "pricing:integration-selftest": "node scripts/selftest-pricing-integration.mjs",
+    "reservation:relations-check": "node --test scripts/selftest-leg-and-driver-consolidation.mjs",
+    "reservation:workflow-check": "node --test scripts/selftest-status-expense-incident-consolidation.mjs",
+    "test-ui": "node scripts/serve-api-test-ui.mjs",
+    "db:consolidation-check": "node scripts/check-consolidation-schema.mjs",
+    "start:checked": "npm run db:consolidation-check && npm start",
+    "db:consolidation-selftest": "node --test scripts/selftest-consolidation-schema.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.891.0",

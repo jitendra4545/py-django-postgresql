@@ -1,3 +1,4 @@
+import { MOBILE_DRIVER_ASSIGNMENTS } from '../src/services/driver-assignment-storage.js';
 import crypto from 'node:crypto';
 import { URLSearchParams } from 'node:url';
 import { env } from '../src/config/env.js';
@@ -11,7 +12,7 @@ import { pool, query } from '../src/db/pool.js';
  *   GET /operations/chauffeurs/available
  *
  * Older backend packages do not expose that route. Instead, it checks
- * app_driver_assignments directly before creating any booking.
+ * the reservation_drivers mobile assignment fields before booking.
  *
  * Required .env values:
  *   API_BASE_URL=http://localhost:3000
@@ -269,7 +270,7 @@ async function driverHasConflict(startAt, endAt) {
   const rows = await query(
     `SELECT id, status, scheduled_start_at AS scheduledStartAt,
             scheduled_end_at AS scheduledEndAt
-       FROM app_driver_assignments
+       FROM ${MOBILE_DRIVER_ASSIGNMENTS} mobile_assignment
       WHERE driver_id=?
         AND status NOT IN ('DECLINED','COMPLETED','NO_SHOW','CANCELLED')
         AND scheduled_start_at < ?

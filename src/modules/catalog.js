@@ -6,6 +6,7 @@ import { validate } from '../common/validate.js';
 import { query } from '../db/pool.js';
 import { availabilityDateParams, availableClassSql } from '../services/vehicle-availability.js';
 import { LEGACY_SERVICE_TYPES } from '../services/legacy-pricing-rules.js';
+import { websiteServiceToCatalogItem } from '../services/service-catalog.js';
 import { autocompletePlace, getPlaceDetails, getRoutePreview } from '../services/google-maps.js';
 
 const router = Router();
@@ -41,11 +42,13 @@ router.get(
   '/services',
   asyncHandler(async (_request, response) => {
     const services = await query(
-      `SELECT code, title, description, icon_url AS iconUrl, booking_mode AS bookingMode,
-              legacy_service_id AS legacyServiceId
-         FROM app_service_catalog WHERE is_active = 1 ORDER BY display_order`,
+      `SELECT id, title, slug, image, description_en
+         FROM services
+        ORDER BY id`,
     );
-    response.json({ items: services });
+    response.json({
+      items: services.map((service) => websiteServiceToCatalogItem(service, rentTypeByService)),
+    });
   }),
 );
 

@@ -78,7 +78,7 @@ SELECT p.id, p.reservation_id, p.status AS payment_status,
        p.provider_reference, p.created_at,
        arm.lifecycle_status, q.valid_until
   FROM app_payment_transactions p
-  JOIN app_reservation_meta arm ON arm.reservation_id=p.reservation_id
+  JOIN reservations arm ON arm.id=p.reservation_id AND arm.service_code IS NOT NULL
   LEFT JOIN app_quote_snapshots q ON q.id=arm.quote_snapshot_id
  WHERE p.id IN (57, 58, 59);
 ```

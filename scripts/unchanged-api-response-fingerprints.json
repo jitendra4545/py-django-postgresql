@@ -1,0 +1,18 @@
+{
+  "src/modules/operations.js": {
+    "count": 16,
+    "sha256": "63b7a59fd487aab2c837515ddba918a286ba6fbf632094d6df5828f7337f295b"
+  },
+  "src/modules/chauffeur.js": {
+    "count": 12,
+    "sha256": "7dd82656f432e55e925327b7c0ae58c6e475ecf0d209fc509397f7b17bebb666"
+  },
+  "src/modules/payments.js": {
+    "count": 15,
+    "sha256": "307b46197509abf90a1062e11dba6269edd4e5ae961392dd4bec32f4b4cbad70"
+  },
+  "src/modules/communication.js": {
+    "count": 5,
+    "sha256": "6eec9723ef113e32eb49a239ce6fed92f33ad17d9e89b912df547b1884fe30c3"
+  }
+}

@@ -30,7 +30,7 @@ This package uses the supplied PHP `app` source and the September 2026 database 
 
 - No telecom provider was supplied. Masked calling stays explicitly disabled; chat/notifications/GPS are separate.
 - Cancellation fees/refund policies are not finalized by the client; do not promise a computed cancellation amount.
-- The app extension has no reviewed backfill for historical website reservations. Existing bookings without `app_reservation_meta` will not automatically appear in the mobile lists.
+- The app extension has no reviewed backfill for historical website reservations. Existing bookings without `reservations.service_code` will not automatically appear in the mobile lists after migration 008.
 - The PHP website may write reservations concurrently. Without a shared locking protocol, the availability checks in this API alone cannot guarantee cross-application exclusivity.
 - Google Places and Routes may need separate API enablement, billing and key restrictions. No real key is embedded in this package.
 - The PHP public booking flow applies tax to all selected options in one path; this backend respects `rental_options.taxable`. Compare quotes with real finance-approved examples before treating the two implementations as penny-for-penny identical.

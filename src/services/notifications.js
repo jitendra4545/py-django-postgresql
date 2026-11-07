@@ -1,3 +1,4 @@
+import { MOBILE_DRIVER_ASSIGNMENTS } from './driver-assignment-storage.js';
 import { query, transaction } from '../db/pool.js';
 import { emitToUser } from './realtime.js';
 
@@ -49,7 +50,7 @@ export const notifyBookingAudience = async (
       WHERE r.id = ?
      UNION
      SELECT DISTINCT d.user_id
-       FROM app_driver_assignments ada
+       FROM ${MOBILE_DRIVER_ASSIGNMENTS} ada
        JOIN drivers d ON d.id = ada.driver_id
       WHERE ada.reservation_id = ? AND ada.status NOT IN ('DECLINED','CANCELLED')`,
     [reservationId, reservationId, reservationId],

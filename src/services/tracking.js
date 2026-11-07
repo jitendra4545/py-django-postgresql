@@ -1,3 +1,5 @@
+import { MOBILE_BOOKING_STATUS_EVENTS } from './mobile-status-events.js';
+import { MOBILE_DRIVER_ASSIGNMENTS } from './driver-assignment-storage.js';
 import { env } from '../config/env.js';
 import { one, query } from '../db/pool.js';
 
@@ -32,7 +34,7 @@ export const loadTrackingView = async (reservationId) => {
     `SELECT ada.id,ada.reservation_details_id AS reservationDetailsId,ada.status,
             ada.scheduled_start_at AS scheduledStartAt,ada.scheduled_end_at AS scheduledEndAt,
             d.full_name AS chauffeurName,d.photo AS chauffeurPhoto
-       FROM app_driver_assignments ada
+       FROM ${MOBILE_DRIVER_ASSIGNMENTS} ada
        JOIN drivers d ON d.id=ada.driver_id
       WHERE ada.reservation_id=? AND ada.status NOT IN ('DECLINED','CANCELLED')
       ORDER BY ada.scheduled_start_at,ada.id`,
@@ -63,7 +65,7 @@ export const loadTrackingView = async (reservationId) => {
     assignments.find((item) => activeStatuses.has(item.status)) ?? assignments[0] ?? null;
   const timeline = await query(
     `SELECT status,note,latitude,longitude,occurred_at AS occurredAt
-       FROM app_booking_status_events WHERE reservation_id=? ORDER BY occurred_at`,
+       FROM ${MOBILE_BOOKING_STATUS_EVENTS} mobile_event WHERE reservation_id=? ORDER BY occurred_at`,
     [reservationId],
   );
   return {

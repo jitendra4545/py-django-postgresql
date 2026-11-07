@@ -1,3 +1,4 @@
+import { recordBookingStatusEvent } from '../services/mobile-status-events.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../common/async-handler.js';
@@ -338,7 +339,7 @@ router.get(
             dates.firstServiceDate, dates.lastServiceDate,
             costs.totalAmount, arm.currency_code AS currency
        FROM reservations r
-       JOIN app_reservation_meta arm ON arm.reservation_id = r.id
+       JOIN reservations arm ON arm.id=r.id AND arm.service_code IS NOT NULL
        LEFT JOIN (
          SELECT reservation_id, MIN(pick_up_date) AS firstServiceDate,
                 MAX(drop_off_date) AS lastServiceDate
@@ -353,7 +354,7 @@ router.get(
       [...params, perPage, offset],
     );
     const count = await one(
-      `SELECT COUNT(*) AS total FROM reservations r JOIN app_reservation_meta arm ON arm.reservation_id=r.id WHERE ${where}`,
+      `SELECT COUNT(*) AS total FROM reservations r JOIN reservations arm ON arm.id=r.id AND arm.service_code IS NOT NULL WHERE ${where}`,
       params,
     );
     response.json(pageResponse(items, Number(count.total), page, perPage));
@@ -400,13 +401,15 @@ router.post(
         ],
       );
       await connection.execute(
-        `UPDATE app_reservation_meta SET lifecycle_status='CHANGE_REQUESTED',updated_at=NOW() WHERE reservation_id=?`,
+        `UPDATE reservations SET lifecycle_status='CHANGE_REQUESTED',updated_at=NOW() WHERE id=?`,
         [request.params.reservationId],
       );
-      await connection.execute(
-        `INSERT INTO app_booking_status_events (reservation_id,status,actor_user_id,note,occurred_at,created_at) VALUES (?,'CHANGE_REQUESTED',?,?,NOW(),NOW())`,
-        [request.params.reservationId, request.auth.userId, request.body.reason],
-      );
+      await recordBookingStatusEvent(connection, {
+        reservationId: request.params.reservationId,
+        status: 'CHANGE_REQUESTED',
+        actorUserId: request.auth.userId,
+        note: request.body.reason,
+      });
       return created;
     });
     response.status(201).json({ id: result.insertId, status: 'PENDING' });
@@ -439,13 +442,15 @@ router.post(
         ],
       );
       await connection.execute(
-        `UPDATE app_reservation_meta SET lifecycle_status='CANCELLATION_REQUESTED',updated_at=NOW() WHERE reservation_id=?`,
+        `UPDATE reservations SET lifecycle_status='CANCELLATION_REQUESTED',updated_at=NOW() WHERE id=?`,
         [request.params.reservationId],
       );
-      await connection.execute(
-        `INSERT INTO app_booking_status_events (reservation_id,status,actor_user_id,note,occurred_at,created_at) VALUES (?,'CANCELLATION_REQUESTED',?,?,NOW(),NOW())`,
-        [request.params.reservationId, request.auth.userId, request.body.reason],
-      );
+      await recordBookingStatusEvent(connection, {
+        reservationId: request.params.reservationId,
+        status: 'CANCELLATION_REQUESTED',
+        actorUserId: request.auth.userId,
+        note: request.body.reason,
+      });
       return created;
     });
     response.status(201).json({ id: result.insertId, status: 'PENDING' });

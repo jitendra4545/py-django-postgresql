@@ -56,7 +56,7 @@ creates a default. Availability uses the final user-selected country/city.
 - Draft: `app_booking_drafts.details` JSON.
 - Reservation country/city IDs: `reservation_details`.
 - Full address, coordinates and instructions:
-  `app_reservation_leg_meta.pickup_details/dropoff_details` JSON.
+  `reservation_details.pickup_details/dropoff_details` JSON (after migration 009).
 - Booking status history: append-only `app_booking_status_events`.
 
 ## D. Manual Airport VIP and Concierge flows (APIs 24–27)

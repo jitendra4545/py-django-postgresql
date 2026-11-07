@@ -1,3 +1,4 @@
+import { MOBILE_DRIVER_ASSIGNMENTS } from '../services/driver-assignment-storage.js';
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
@@ -95,7 +96,7 @@ router.post(
         [conversationId, reservation.customer_id],
       );
       await connection.execute(
-        `INSERT IGNORE INTO app_conversation_participants (conversation_id,user_id,participant_role,joined_at) SELECT ?,d.user_id,'CHAUFFEUR',NOW() FROM app_driver_assignments ada JOIN drivers d ON d.id=ada.driver_id WHERE ada.reservation_id=? AND ada.status NOT IN ('DECLINED','CANCELLED')`,
+        `INSERT IGNORE INTO app_conversation_participants (conversation_id,user_id,participant_role,joined_at) SELECT ?,d.user_id,'CHAUFFEUR',NOW() FROM ${MOBILE_DRIVER_ASSIGNMENTS} ada JOIN drivers d ON d.id=ada.driver_id WHERE ada.reservation_id=? AND ada.status NOT IN ('DECLINED','CANCELLED')`,
         [conversationId, reservation.id],
       );
       await connection.execute(
@@ -306,7 +307,7 @@ router.post(
       ]);
     } else if (recipientRole === 'CHAUFFEUR') {
       recipient = await one(
-        `SELECT d.phone FROM app_driver_assignments ada JOIN drivers d ON d.id=ada.driver_id
+        `SELECT d.phone FROM ${MOBILE_DRIVER_ASSIGNMENTS} ada JOIN drivers d ON d.id=ada.driver_id
           WHERE ada.reservation_id=? AND ada.status NOT IN ('DECLINED','CANCELLED','COMPLETED','NO_SHOW')
           ORDER BY ada.updated_at DESC LIMIT 1`,
         [reservation.id],

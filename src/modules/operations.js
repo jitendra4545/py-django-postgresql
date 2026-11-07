@@ -1,4 +1,6 @@
+import { recordBookingStatusEvent } from '../services/mobile-status-events.js';
 import { Router } from 'express';
+import { MOBILE_DRIVER_ASSIGNMENTS } from '../services/driver-assignment-storage.js';
 import { z } from 'zod';
 import { asyncHandler } from '../common/async-handler.js';
 import { requireAuth, requireRoles } from '../common/auth.js';
@@ -242,7 +244,7 @@ router.get(
          JOIN users u ON u.id=d.user_id AND u.status=0 AND u.role=3 AND u.deleted_at IS NULL
         WHERE d.deleted_at IS NULL
           AND NOT EXISTS (
-            SELECT 1 FROM app_driver_assignments ada
+            SELECT 1 FROM ${MOBILE_DRIVER_ASSIGNMENTS} ada
              WHERE ada.driver_id=d.id
                AND ada.status NOT IN ('DECLINED','COMPLETED','NO_SHOW','CANCELLED')
                AND ada.scheduled_start_at < ? AND ada.scheduled_end_at > ?
@@ -291,7 +293,7 @@ router.get(
               arm.service_code AS serviceCode,arm.lifecycle_status AS status,
               costs.totalAmount,arm.currency_code AS currency
          FROM reservations r
-         JOIN app_reservation_meta arm ON arm.reservation_id=r.id
+         JOIN reservations arm ON arm.id=r.id AND arm.service_code IS NOT NULL
          JOIN customers c ON c.id=r.customer_id
          LEFT JOIN (
            SELECT reservation_id,SUM(total_amount) AS totalAmount
@@ -311,7 +313,7 @@ router.post(
   ),
   asyncHandler(async (request, response) => {
     const reservation = await one(
-      `SELECT r.id,arm.lifecycle_status FROM reservations r JOIN app_reservation_meta arm ON arm.reservation_id=r.id WHERE r.id=? FOR UPDATE`,
+      `SELECT r.id,arm.lifecycle_status FROM reservations r JOIN reservations arm ON arm.id=r.id AND arm.service_code IS NOT NULL WHERE r.id=? FOR UPDATE`,
       [request.params.reservationId],
     );
     if (!reservation) throw notFound('Booking not found');
@@ -328,13 +330,15 @@ router.post(
         ],
       );
       await connection.execute(
-        'UPDATE app_reservation_meta SET lifecycle_status=?,updated_at=NOW() WHERE reservation_id=?',
+        'UPDATE reservations SET lifecycle_status=?,updated_at=NOW() WHERE id=?',
         [status, reservation.id],
       );
-      await connection.execute(
-        `INSERT INTO app_booking_status_events (reservation_id,status,actor_user_id,note,occurred_at,created_at) VALUES (?,?,?,?,NOW(),NOW())`,
-        [reservation.id, status, request.auth.userId, request.body.note ?? null],
-      );
+      await recordBookingStatusEvent(connection, {
+        reservationId: reservation.id,
+        status,
+        actorUserId: request.auth.userId,
+        note: request.body.note ?? null,
+      });
       await writeActivityLog(connection, {
         subjectType: 'Reservation',
         subjectId: reservation.id,
@@ -364,14 +368,17 @@ router.post(
       driverId: z.number().int().positive(),
       scheduledStartAt: z.string().datetime(),
       scheduledEndAt: z.string().datetime(),
+      // Optional and backwards compatible: omitted means the original pickup assignment.
+      assignmentRole: z.enum(['PICKUP', 'DROPOFF']).default('PICKUP'),
     }),
   ),
   asyncHandler(async (request, response) => {
     const start = request.body.scheduledStartAt.slice(0, 19).replace('T', ' ');
     const end = request.body.scheduledEndAt.slice(0, 19).replace('T', ' ');
+    const role = request.body.assignmentRole;
     const result = await transaction(async (connection) => {
       const [details] = await connection.execute(
-        `SELECT rd.id,rd.reservation_id FROM reservation_details rd JOIN app_reservation_meta arm ON arm.reservation_id=rd.reservation_id WHERE rd.id=? AND rd.reservation_id=? AND arm.lifecycle_status IN ('CONFIRMED','ASSIGNED') FOR UPDATE`,
+        `SELECT rd.id,rd.reservation_id FROM reservation_details rd JOIN reservations arm ON arm.id=rd.reservation_id AND arm.service_code IS NOT NULL WHERE rd.id=? AND rd.reservation_id=? AND arm.lifecycle_status IN ('CONFIRMED','ASSIGNED') FOR UPDATE`,
         [request.params.detailId, request.params.reservationId],
       );
       if (!details[0]) throw notFound('Confirmed booking leg not found');
@@ -381,51 +388,64 @@ router.post(
       );
       if (!drivers[0]) throw notFound('Chauffeur not found');
       const [conflicts] = await connection.execute(
-        `SELECT id FROM app_driver_assignments WHERE driver_id=? AND status NOT IN ('DECLINED','COMPLETED','NO_SHOW','CANCELLED') AND scheduled_start_at < ? AND scheduled_end_at > ? LIMIT 1`,
+        `SELECT id FROM ${MOBILE_DRIVER_ASSIGNMENTS} mobile_assignment WHERE driver_id=? AND status NOT IN ('DECLINED','COMPLETED','NO_SHOW','CANCELLED') AND scheduled_start_at < ? AND scheduled_end_at > ? LIMIT 1`,
         [request.body.driverId, end, start],
       );
       if (conflicts[0]) throw conflict('The chauffeur already has an overlapping assignment');
       await connection.execute(
-        `UPDATE app_driver_assignments SET status='CANCELLED',updated_at=NOW() WHERE reservation_details_id=? AND status NOT IN ('COMPLETED','CANCELLED','DECLINED')`,
-        [request.params.detailId],
+        `UPDATE reservation_drivers SET mobile_assignment_status='CANCELLED',updated_at=NOW() WHERE reservation_details_id=? AND mobile_assignment_id IS NOT NULL AND mobile_assignment_role IN (?, 'BOTH') AND mobile_assignment_status NOT IN ('COMPLETED','CANCELLED','DECLINED')`,
+        [request.params.detailId, role],
+      );
+      // The public assignment ID must remain independent of the website's
+      // reservation_drivers.id (which may already have unrelated PHP records).
+      const [publicId] = await connection.execute(
+        'INSERT INTO app_mobile_assignment_ids VALUES (NULL)',
       );
       const [legacy] = await connection.execute(
-        `INSERT INTO reservation_drivers (reservation_id,reservation_details_id,pick_up_date,pick_up_time,pick_up_driver_id,user_id,status,created_at,updated_at) VALUES (?,?,DATE(?),TIME(?),?,?,1,NOW(),NOW())`,
+        `INSERT INTO reservation_drivers
+           (reservation_id,reservation_details_id,
+            pick_up_date,pick_up_time,pick_up_driver_id,
+            drop_off_date,drop_off_time,drop_off_driver_id,
+            user_id,status,created_at,updated_at,
+            mobile_assignment_id,mobile_driver_id,mobile_assignment_status,
+            mobile_assignment_role,scheduled_start_at,scheduled_end_at,assigned_by_user_id)
+         VALUES (?,?,?,?,?,?,?,?,?,1,NOW(),NOW(),?,?,'OFFERED',?,?,?,?)`,
         [
           request.params.reservationId,
           request.params.detailId,
-          start,
-          start,
-          request.body.driverId,
+          role === 'PICKUP' ? start.slice(0, 10) : null,
+          role === 'PICKUP' ? start.slice(11, 19) : null,
+          role === 'PICKUP' ? request.body.driverId : null,
+          role === 'DROPOFF' ? end.slice(0, 10) : null,
+          role === 'DROPOFF' ? end.slice(11, 19) : null,
+          role === 'DROPOFF' ? request.body.driverId : null,
           request.auth.userId,
-        ],
-      );
-      const [assignment] = await connection.execute(
-        `INSERT INTO app_driver_assignments (reservation_id,reservation_details_id,legacy_reservation_driver_id,driver_id,status,scheduled_start_at,scheduled_end_at,assigned_by_user_id,created_at,updated_at) VALUES (?,?,?,?,'OFFERED',?,?,?,NOW(),NOW())`,
-        [
-          request.params.reservationId,
-          request.params.detailId,
-          legacy.insertId,
+          publicId.insertId,
           request.body.driverId,
+          role,
           start,
           end,
           request.auth.userId,
         ],
       );
+      // Preserve the old assignmentFor/detail response's legacy driver row ID.
       await connection.execute(
-        `UPDATE app_reservation_meta SET lifecycle_status='ASSIGNED',updated_at=NOW() WHERE reservation_id=?`,
+        'UPDATE reservation_drivers SET mobile_legacy_reservation_driver_id=? WHERE id=?',
+        [legacy.insertId, legacy.insertId],
+      );
+      await connection.execute(
+        `UPDATE reservations SET lifecycle_status='ASSIGNED',updated_at=NOW() WHERE id=?`,
         [request.params.reservationId],
       );
-      await connection.execute(
-        `INSERT INTO app_booking_status_events (reservation_id,reservation_details_id,assignment_id,status,actor_user_id,note,occurred_at,created_at) VALUES (?,?,?,'ASSIGNED',?,'Chauffeur assigned',NOW(),NOW())`,
-        [
-          request.params.reservationId,
-          request.params.detailId,
-          assignment.insertId,
-          request.auth.userId,
-        ],
-      );
-      return { assignmentId: assignment.insertId, driverUserId: drivers[0].user_id };
+      await recordBookingStatusEvent(connection, {
+        reservationId: request.params.reservationId,
+        reservationDetailsId: request.params.detailId,
+        assignmentId: publicId.insertId,
+        status: 'ASSIGNED',
+        actorUserId: request.auth.userId,
+        note: 'Chauffeur assigned',
+      });
+      return { assignmentId: publicId.insertId, driverUserId: drivers[0].user_id };
     });
     await notifyUser({
       userId: result.driverUserId,
@@ -483,7 +503,7 @@ router.post(
   asyncHandler(async (request, response) => {
     const assignment = await transaction(async (connection) => {
       const [details] = await connection.execute(
-        `SELECT rd.*,rlm.vehicle_class_id FROM reservation_details rd JOIN app_reservation_leg_meta rlm ON rlm.reservation_details_id=rd.id WHERE rd.id=? AND rd.reservation_id=? FOR UPDATE`,
+        `SELECT rd.*,rlm.vehicle_class_id FROM reservation_details rd JOIN reservation_details rlm ON rlm.id=rd.id AND rlm.sequence_no IS NOT NULL WHERE rd.id=? AND rd.reservation_id=? FOR UPDATE`,
         [request.params.detailId, request.params.reservationId],
       );
       const detail = details[0];
@@ -641,7 +661,7 @@ router.post(
           [request.body.resolutionNote, request.auth.userId, item.id],
         );
         await connection.execute(
-          `UPDATE app_reservation_meta SET lifecycle_status=?,updated_at=NOW() WHERE reservation_id=?`,
+          `UPDATE reservations SET lifecycle_status=?,updated_at=NOW() WHERE id=?`,
           [item.previous_lifecycle_status, item.reservation_id],
         );
         await writeActivityLog(connection, {
@@ -711,15 +731,15 @@ router.post(
         [request.body.resolutionNote, request.auth.userId, item.id],
       );
       await connection.execute(
-        `UPDATE app_reservation_meta SET lifecycle_status=?,updated_at=NOW() WHERE reservation_id=?`,
+        `UPDATE reservations SET lifecycle_status=?,updated_at=NOW() WHERE id=?`,
         [lifecycleStatus, item.reservation_id],
       );
-      await connection.execute(
-        `INSERT INTO app_booking_status_events
-          (reservation_id,status,actor_user_id,note,occurred_at,created_at)
-         VALUES (?,'CHANGE_APPROVED',?,?,NOW(),NOW())`,
-        [item.reservation_id, request.auth.userId, request.body.resolutionNote],
-      );
+      await recordBookingStatusEvent(connection, {
+        reservationId: item.reservation_id,
+        status: 'CHANGE_APPROVED',
+        actorUserId: request.auth.userId,
+        note: request.body.resolutionNote,
+      });
       await writeActivityLog(connection, {
         subjectType: 'Reservation',
         subjectId: item.reservation_id,
@@ -850,11 +870,11 @@ router.post(
           [request.auth.userId, item.reservation_id],
         );
         await connection.execute(
-          `UPDATE app_reservation_meta SET lifecycle_status='CANCELLED',updated_at=NOW() WHERE reservation_id=?`,
+          `UPDATE reservations SET lifecycle_status='CANCELLED',updated_at=NOW() WHERE id=?`,
           [item.reservation_id],
         );
         await connection.execute(
-          `UPDATE app_driver_assignments SET status='CANCELLED',updated_at=NOW() WHERE reservation_id=? AND status NOT IN ('COMPLETED','CANCELLED')`,
+          `UPDATE reservation_drivers SET mobile_assignment_status='CANCELLED',updated_at=NOW() WHERE reservation_id=? AND mobile_assignment_id IS NOT NULL AND mobile_assignment_status NOT IN ('COMPLETED','CANCELLED')`,
           [item.reservation_id],
         );
         await connection.execute(`DELETE FROM vehicle_reserved_dates WHERE reservation_id=?`, [
@@ -873,12 +893,12 @@ router.post(
           );
         }
         await connection.execute(
-          `UPDATE app_reservation_meta SET lifecycle_status='CANCELLATION_APPROVED',updated_at=NOW() WHERE reservation_id=?`,
+          `UPDATE reservations SET lifecycle_status='CANCELLATION_APPROVED',updated_at=NOW() WHERE id=?`,
           [item.reservation_id],
         );
       } else {
         await connection.execute(
-          `UPDATE app_reservation_meta SET lifecycle_status=?,updated_at=NOW() WHERE reservation_id=?`,
+          `UPDATE reservations SET lifecycle_status=?,updated_at=NOW() WHERE id=?`,
           [item.previous_lifecycle_status, item.reservation_id],
         );
       }
@@ -919,7 +939,10 @@ router.patch(
   ),
   asyncHandler(async (request, response) => {
     const result = await query(
-      `UPDATE app_driver_expenses SET status=?,review_note=?,reviewed_by_user_id=?,reviewed_at=NOW(),updated_at=NOW() WHERE id=?`,
+      `UPDATE reservation_other_costs
+          SET mobile_expense_status=?,mobile_review_note=?,mobile_reviewed_by_user_id=?,
+              mobile_reviewed_at=NOW(),updated_at=NOW()
+        WHERE mobile_expense_id=? AND type='MOBILE_DRIVER_EXPENSE'`,
       [
         request.body.status,
         request.body.reviewNote ?? null,
@@ -929,8 +952,9 @@ router.patch(
     );
     if (!result.affectedRows) throw notFound('Expense not found');
     const expenseOwner = await one(
-      `SELECT d.user_id AS userId FROM app_driver_expenses e
-         JOIN drivers d ON d.id=e.driver_id WHERE e.id=?`,
+      `SELECT d.user_id AS userId FROM reservation_other_costs e
+         JOIN drivers d ON d.id=e.mobile_driver_id
+        WHERE e.mobile_expense_id=? AND e.type='MOBILE_DRIVER_EXPENSE'`,
       [request.params.expenseId],
     );
     if (expenseOwner?.userId) {
@@ -956,7 +980,10 @@ router.patch(
   ),
   asyncHandler(async (request, response) => {
     const result = await query(
-      `UPDATE app_incidents SET status=?,resolution_note=?,resolved_by_user_id=?,resolved_at=IF(? IN ('RESOLVED','CLOSED'),NOW(),resolved_at),updated_at=NOW() WHERE id=?`,
+      `UPDATE reservation_service_incidents
+          SET status=?,resolution_note=?,resolved_by_user_id=?,
+              resolved_at=IF(? IN ('RESOLVED','CLOSED'),NOW(),resolved_at),updated_at=NOW()
+        WHERE id=?`,
       [
         request.body.status,
         request.body.resolutionNote ?? null,
@@ -967,7 +994,7 @@ router.patch(
     );
     if (!result.affectedRows) throw notFound('Incident not found');
     const incident = await one(
-      'SELECT reported_by_user_id AS userId,reservation_id AS reservationId FROM app_incidents WHERE id=?',
+      'SELECT reported_by_user_id AS userId,reservation_id AS reservationId FROM reservation_service_incidents WHERE id=?',
       [request.params.incidentId],
     );
     if (incident) {

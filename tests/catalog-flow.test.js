@@ -6,6 +6,12 @@ const operations = fs.readFileSync('src/modules/operations.js', 'utf8');
 const schemaVerifier = fs.readFileSync('src/scripts/verify-legacy-schema.js', 'utf8');
 
 describe('frontend catalog and assignment discovery APIs', () => {
+  it('reads the website services table instead of the absent app_service_catalog table', () => {
+    expect(catalog).toContain("'/services'");
+    expect(catalog).toMatch(/FROM services\b/);
+    expect(catalog).not.toContain('app_service_catalog');
+  });
+
   it('provides active countries and cities from existing tables', () => {
     expect(catalog).toContain("'/countries'");
     expect(catalog).toContain('FROM countries');

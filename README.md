@@ -98,6 +98,7 @@ Browser password-reset page: `http://localhost:3000/reset-password?token=...`
 - [Complete frontend API flow](docs/ALL_76_API_FRONTEND_FLOW.md)
 - [Animated frontend API flow](docs/ALL_76_API_FLOW_ANIMATED.html)
 - [Database changes](docs/DATABASE_CHANGES.md)
+- [Reservation header, leg and chauffeur consolidation (migrations 008-009)](docs/RESERVATION_LEG_AND_DRIVER_CONSOLIDATION.md)
 - [DigitalOcean deployment](docs/DIGITALOCEAN_DEPLOYMENT.md)
 - [Production communication, tracking and storage integration](docs/PRODUCTION_INTEGRATIONS.md)
 - [OpenAPI contract](docs/openapi.json)
@@ -106,6 +107,7 @@ Browser password-reset page: `http://localhost:3000/reset-password?token=...`
 
 ## Important integration notes
 
+- **Database release 009:** Add mobile leg/assignment columns to the existing `reservation_details` and `reservation_drivers` tables, and repoint four child-table FKs. Apply after 008 on a verified staging backup **before running this code**; old extension tables remain for rollback. `npm run reservation:relations-check` runs static checks.
 - `PAYMENT_PROVIDER=mock` is for local development only. Use `PAYMENT_PROVIDER=stripe` for staging and production.
 - `.env.example` contains placeholders only. Never commit Stripe secret or webhook-signing keys.
 - Mobile apps must register an Expo push token in the existing login device payload.
@@ -114,7 +116,7 @@ Browser password-reset page: `http://localhost:3000/reset-password?token=...`
 - DigitalOcean App Platform deployment trusts exactly one proxy hop so `express-rate-limit` can identify clients from forwarded IP headers.
 - Invoice access reads existing `reservation_invoices` and `reservation_invoice_details` when `INVOICE_ADAPTER=legacy`; Operations still owns invoice creation.
 - Agent and Chauffeur Google login works only for an existing active invited account with the same verified email; Google login never self-registers those roles.
-- Existing historical reservations are not automatically visible because they lack `app_reservation_meta`. Plan a reviewed backfill if this is required.
+- Existing historical website reservations are not automatically visible to mobile clients because they lack `reservations.service_code`; this preserves previous mobile visibility. See `docs/RESERVATIONS_SINGLE_TABLE_CONSOLIDATION.md` before deploying the schema change or planning a reviewed backfill.
 - `GOOGLE_PLACES_API_KEY` enables address autocomplete. Distance-based production quotes also require an authorized Routes API key and `GOOGLE_ROUTES_ENABLED=true`; no submitted kilometres are trusted in production.
 - Unpaid checkout holds expire after the quotation window; signed Stripe payment-success events confirm legacy `reservations.status=1` and `payment_status=20` automatically.
 - See [Legacy compatibility and staging checklist](docs/LEGACY_PARITY_STAGING.md) before pointing this release at the shared website database.
@@ -148,3 +150,6 @@ this table; it does not rerun older migrations or bypass historical checksums.
 
 See [API_DATABASE_REQUEST_LOGGING.md](docs/API_DATABASE_REQUEST_LOGGING.md) for
 sample MySQL queries, privacy redaction, retention, queue behavior and testing.
+
+
+**Reservation metadata storage:** As of the November 2026 consolidation, runtime booking flows store mobile-specific metadata on `reservations`, not `app_reservation_meta`. Apply migration 008 before starting the updated API; see `docs/RESERVATIONS_SINGLE_TABLE_CONSOLIDATION.md`.

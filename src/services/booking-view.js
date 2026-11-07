@@ -1,5 +1,7 @@
+import { MOBILE_BOOKING_STATUS_EVENTS } from './mobile-status-events.js';
 import { one, query } from '../db/pool.js';
 import { notFound } from '../common/errors.js';
+import { MOBILE_DRIVER_ASSIGNMENTS } from './driver-assignment-storage.js';
 
 export const loadBookingView = async (reservationId) => {
   const booking = await one(
@@ -9,7 +11,7 @@ export const loadBookingView = async (reservationId) => {
             arm.lifecycle_status AS status, arm.source_channel AS sourceChannel,
             arm.created_by_agent_id AS createdByAgentId, arm.currency_code AS currency
        FROM reservations r
-       JOIN app_reservation_meta arm ON arm.reservation_id = r.id
+       JOIN reservations arm ON arm.id=r.id AND arm.service_code IS NOT NULL
       WHERE r.id = ? AND r.deleted_at IS NULL`,
     [reservationId],
   );
@@ -23,9 +25,9 @@ export const loadBookingView = async (reservationId) => {
               rlm.sequence_no AS sequenceNo, rlm.vehicle_class_id AS vehicleClassId,
               rlm.passenger_count AS passengerCount, rlm.luggage_count AS luggageCount,
               rlm.pickup_details AS pickupDetails, rlm.dropoff_details AS dropoffDetails,
-              rlm.flight_number AS flightNumber, rlm.status
+              rlm.flight_number AS flightNumber, rlm.mobile_leg_status AS status
          FROM reservation_details rd
-         JOIN app_reservation_leg_meta rlm ON rlm.reservation_details_id = rd.id
+         JOIN reservation_details rlm ON rlm.id = rd.id AND rlm.sequence_no IS NOT NULL
         WHERE rd.reservation_id = ? AND rd.deleted_at IS NULL
         ORDER BY rlm.sequence_no`,
       [reservationId],
@@ -39,14 +41,14 @@ export const loadBookingView = async (reservationId) => {
     query(
       `SELECT id, reservation_details_id AS legId, assignment_id AS assignmentId,
               status, note, occurred_at AS occurredAt
-         FROM app_booking_status_events WHERE reservation_id = ? ORDER BY occurred_at, id`,
+         FROM ${MOBILE_BOOKING_STATUS_EVENTS} mobile_event WHERE reservation_id = ? ORDER BY occurred_at, id`,
       [reservationId],
     ),
     query(
       `SELECT ada.id, ada.reservation_details_id AS legId, ada.status,
               ada.scheduled_start_at AS scheduledStartAt, ada.scheduled_end_at AS scheduledEndAt,
               d.full_name AS chauffeurName, d.photo AS chauffeurPhoto
-         FROM app_driver_assignments ada
+         FROM ${MOBILE_DRIVER_ASSIGNMENTS} ada
          JOIN drivers d ON d.id = ada.driver_id
         WHERE ada.reservation_id = ? AND ada.status <> 'CANCELLED'
         ORDER BY ada.created_at DESC`,

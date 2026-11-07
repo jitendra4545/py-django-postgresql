@@ -75,7 +75,7 @@ router.get(
         [request.auth.agentId],
       ),
       one(
-        `SELECT COUNT(*) AS total FROM reservations r JOIN app_reservation_meta arm ON arm.reservation_id=r.id WHERE r.customer_id IN (SELECT customer_id FROM app_agent_customer_assignments WHERE agent_id=? AND status='ACTIVE') AND arm.lifecycle_status NOT IN ('COMPLETED','CANCELLED')`,
+        `SELECT COUNT(*) AS total FROM reservations r JOIN reservations arm ON arm.id=r.id AND arm.service_code IS NOT NULL WHERE r.customer_id IN (SELECT customer_id FROM app_agent_customer_assignments WHERE agent_id=? AND status='ACTIVE') AND arm.lifecycle_status NOT IN ('COMPLETED','CANCELLED')`,
         [request.auth.agentId],
       ),
       one(`SELECT COUNT(*) AS total FROM app_notifications WHERE user_id=? AND read_at IS NULL`, [
@@ -201,7 +201,7 @@ router.get(
     );
     if (!membership) throw notFound('Client not found in your roster');
     const items = await query(
-      `SELECT r.id,r.reservation_no AS reservationNo,arm.service_code AS serviceCode,arm.lifecycle_status AS status,MIN(rd.pick_up_date) AS serviceDate FROM reservations r JOIN app_reservation_meta arm ON arm.reservation_id=r.id LEFT JOIN reservation_details rd ON rd.reservation_id=r.id WHERE r.customer_id=? AND r.deleted_at IS NULL GROUP BY r.id,arm.service_code,arm.lifecycle_status ORDER BY r.created_at DESC`,
+      `SELECT r.id,r.reservation_no AS reservationNo,arm.service_code AS serviceCode,arm.lifecycle_status AS status,MIN(rd.pick_up_date) AS serviceDate FROM reservations r JOIN reservations arm ON arm.id=r.id AND arm.service_code IS NOT NULL LEFT JOIN reservation_details rd ON rd.reservation_id=r.id WHERE r.customer_id=? AND r.deleted_at IS NULL GROUP BY r.id,arm.service_code,arm.lifecycle_status ORDER BY r.created_at DESC`,
       [request.params.customerId],
     );
     response.json({ items });

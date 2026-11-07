@@ -50,7 +50,7 @@
       "post": { "tags": ["Authentication"], "summary": "Activate an invited Agency Agent or Chauffeur account", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["token", "password"], "properties": { "token": { "type": "string" }, "password": { "type": "string", "minLength": 10 } } } } } }, "responses": { "200": { "description": "Account activated" } } }
     },
     "/catalog/services": {
-      "get": { "tags": ["Catalog"], "summary": "List all Release 1 services", "responses": { "200": { "description": "Service catalog" } } }
+      "get": { "tags": ["Catalog"], "summary": "List services from the website services table", "description": "Reads the existing services table and preserves the mobile catalog fields (code, title, description, iconUrl, bookingMode, legacyServiceId). Recognized instant services are CHAUFFEUR, CAR_RENTAL and TRANSFER; other services are manual requests and may require a separate request flow.", "responses": { "200": { "description": "Service catalog" } } }
     },
     "/catalog/countries": {
       "get": { "tags": ["Catalog"], "summary": "List active countries for frontend selection", "description": "When serviceCode is supplied, returns only countries with an active online-bookable vehicle class and configured price for that instant-booking service.", "parameters": [{ "name": "serviceCode", "in": "query", "schema": { "$ref": "#/components/schemas/InstantServiceCode" } }], "responses": { "200": { "description": "Active countries" } } }

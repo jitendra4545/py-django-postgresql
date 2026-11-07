@@ -1,3 +1,4 @@
+import { recordBookingStatusEvent } from './mobile-status-events.js';
 import crypto from 'node:crypto';
 import { v4 as uuid } from 'uuid';
 import { AppError } from '../common/errors.js';
@@ -113,15 +114,11 @@ const sqlTime = (iso) => new Date(iso).toISOString().slice(11, 19);
 
 export const createLegacyReservation = async (connection, { draft, quote, auth }) => {
   const details = typeof draft.details === 'string' ? JSON.parse(draft.details) : draft.details;
-  const service = await connection
-    .execute('SELECT legacy_service_id FROM app_service_catalog WHERE code = ?', [
-      draft.service_code,
-    ])
-    .then(([rows]) => rows[0]);
-  if (
-    !service?.legacy_service_id ||
-    Number(service.legacy_service_id) !== LEGACY_SERVICE_TYPES[draft.service_code]
-  ) {
+  // The original reservation service types are fixed (1=chauffeur,
+  // 2=car rental, 3=transfer). The website `services` table is editorial;
+  // its IDs must not be substituted for `reservations.service_type`.
+  const legacyServiceId = LEGACY_SERVICE_TYPES[draft.service_code];
+  if (!legacyServiceId) {
     throw new AppError(
       422,
       'SERVICE_NOT_MAPPED',
@@ -179,7 +176,7 @@ export const createLegacyReservation = async (connection, { draft, quote, auth }
     [
       bookingUuid,
       temporaryReservationNo,
-      service.legacy_service_id,
+      legacyServiceId,
       draft.customer_id,
       agencyId,
       quote.currency === 'CHF' ? 'CHF' : '€',
@@ -205,19 +202,22 @@ export const createLegacyReservation = async (connection, { draft, quote, auth }
     reservationNo,
     reservationId,
   ]);
+  // Store the mobile metadata on the same legacy reservation row. The
+  // website's numeric `status` and `service_type` are left unchanged.
   await connection.execute(
-    `INSERT INTO app_reservation_meta
-      (reservation_id, service_code, source_channel, created_by_user_id, created_by_agent_id,
-       lifecycle_status, currency_code, quote_snapshot_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 'PAYMENT_PENDING', ?, ?, NOW(), NOW())`,
+    `UPDATE reservations
+        SET service_code=?, source_channel=?, created_by_user_id=?,
+            created_by_agent_id=?, lifecycle_status='PAYMENT_PENDING',
+            currency_code=?, quote_snapshot_id=?, updated_at=NOW()
+      WHERE id=?`,
     [
-      reservationId,
       draft.service_code,
       auth.role === 4 ? 'AGENCY_AGENT_APP' : 'CLIENT_APP',
       auth.userId,
       auth.agentId ?? null,
       quote.currency,
       draft.quote_snapshot_id,
+      reservationId,
     ],
   );
 
@@ -262,13 +262,12 @@ export const createLegacyReservation = async (connection, { draft, quote, auth }
     );
     const detailId = detailResult.insertId;
     await connection.execute(
-      `INSERT INTO app_reservation_leg_meta
-        (reservation_id, reservation_details_id, sequence_no, vehicle_class_id, passenger_count,
-         luggage_count, pickup_details, dropoff_details, flight_number, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', NOW(), NOW())`,
+      `UPDATE reservation_details
+          SET sequence_no=?, vehicle_class_id=?, passenger_count=?, luggage_count=?,
+              pickup_details=?, dropoff_details=?, flight_number=?,
+              mobile_leg_status='PENDING', updated_at=NOW()
+        WHERE id=? AND reservation_id=?`,
       [
-        reservationId,
-        detailId,
         index + 1,
         details.vehicleClassId,
         details.passenger?.count ?? 1,
@@ -276,6 +275,8 @@ export const createLegacyReservation = async (connection, { draft, quote, auth }
         JSON.stringify(leg.pickup),
         JSON.stringify(leg.dropoff ?? {}),
         details.passenger?.flightNumber ?? null,
+        detailId,
+        reservationId,
       ],
     );
     const stops = [...(leg.stops ?? []), ...(leg.dropoff ? [leg.dropoff] : [])];
@@ -410,12 +411,12 @@ export const createLegacyReservation = async (connection, { draft, quote, auth }
       reservationId,
     ]);
   }
-  await connection.execute(
-    `INSERT INTO app_booking_status_events
-      (reservation_id, status, actor_user_id, note, occurred_at, created_at)
-     VALUES (?, 'PAYMENT_PENDING', ?, 'Booking created from mobile application', NOW(), NOW())`,
-    [reservationId, auth.userId],
-  );
+  await recordBookingStatusEvent(connection, {
+    reservationId,
+    status: 'PAYMENT_PENDING',
+    actorUserId: auth.userId,
+    note: 'Booking created from mobile application',
+  });
   // The website's Operations team owns agency_commissions. Do not write a
   // competing calculation from the mobile checkout.
   return { reservationId, reservationNo };

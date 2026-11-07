@@ -38,7 +38,7 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
   const [reservations] = await connection.execute(
     `SELECT r.*,arm.service_code,arm.lifecycle_status
        FROM reservations r
-       JOIN app_reservation_meta arm ON arm.reservation_id=r.id
+       JOIN reservations arm ON arm.id=r.id AND arm.service_code IS NOT NULL
       WHERE r.id=? FOR UPDATE`,
     [changeRequest.reservation_id],
   );
@@ -56,7 +56,7 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
     `SELECT rd.*,rlm.vehicle_class_id,rlm.pickup_details,rlm.dropoff_details,
             rlm.passenger_count,rlm.luggage_count,rlm.flight_number
        FROM reservation_details rd
-       JOIN app_reservation_leg_meta rlm ON rlm.reservation_details_id=rd.id
+       JOIN reservation_details rlm ON rlm.id=rd.id AND rlm.sequence_no IS NOT NULL
       WHERE rd.reservation_id=? AND rd.deleted_at IS NULL
       ORDER BY rlm.sequence_no FOR UPDATE`,
     [reservation.id],
@@ -210,10 +210,10 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
       ],
     );
     await connection.execute(
-      `UPDATE app_reservation_leg_meta
+      `UPDATE reservation_details
           SET vehicle_class_id=?,passenger_count=?,luggage_count=?,pickup_details=?,dropoff_details=?,
               flight_number=?,updated_at=NOW()
-        WHERE reservation_details_id=?`,
+        WHERE id=?`,
       [
         vehicleClassId,
         passenger.count ?? row.passenger_count,
@@ -410,8 +410,8 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
 
   if (requiresReassignment) {
     await connection.execute(
-      `UPDATE app_driver_assignments SET status='CANCELLED',updated_at=NOW()
-        WHERE reservation_id=? AND status NOT IN ('COMPLETED','CANCELLED')`,
+      `UPDATE reservation_drivers SET mobile_assignment_status='CANCELLED',updated_at=NOW()
+        WHERE reservation_id=? AND mobile_assignment_id IS NOT NULL AND mobile_assignment_status NOT IN ('COMPLETED','CANCELLED')`,
       [reservation.id],
     );
   }
