@@ -338,51 +338,23 @@ router.post(
         });
       }
       
-      
-      
-      // ... existing variables extracted from req.body and req.params (around line 309)
 
-// 1. ADD THIS VERIFICATION BLOCK FIRST
-const [assignment] = await connection.query(
-    'SELECT mobile_assignment_id FROM reservation_drivers WHERE mobile_assignment_id = ?', 
-    [assignmentId]
-);
-
-// 2. ADD THE SILENT DROP
-if (!assignment || assignment.length === 0) {
-    // Return standard success to the mobile app so it stops retrying, 
-    // but skip the database insert entirely.
-    return res.status(200).json({ 
-        success: true, 
-        message: 'Location updated' // Verify this matches your exact success payload keys
-    });
-}
-
-// 3. YOUR EXISTING CODE STAYS EXACTLY THE SAME (Around line 340)
-await connection.query(
-    `INSERT INTO app_driver_locations
-      (assignment_id,driver_id,latitude,longitude,heading,speed,accuracy,recorded_at,created_at)
-     VALUES (?,?,?,?,?,?,?,?,NOW())`,
-    [assignmentId, driverId, latitude, longitude, heading, speed, accuracy, recordedAt]
-);
-
-return res.status(200).json({ success: true, message: 'Location updated' });
-      // await connection.execute(
-      //   `INSERT INTO app_driver_locations
-      //     (assignment_id,driver_id,latitude,longitude,heading,speed,accuracy,recorded_at,created_at)
-      //    VALUES (?,?,?,?,?,?,?,?,NOW())`,
-      //   [
-      //     lockedAssignment.id,
-      //     request.auth.driverId,
-      //     request.body.latitude,
-      //     request.body.longitude,
-      //     request.body.heading ?? null,
-      //     request.body.speed ?? null,
-      //     request.body.accuracy ?? null,
-      //     request.body.recordedAt.slice(0, 19).replace('T', ' '),
-      //   ],
-      // );
-      // return lockedAssignment;
+      await connection.execute(
+        `INSERT INTO app_driver_locations
+          (assignment_id,driver_id,latitude,longitude,heading,speed,accuracy,recorded_at,created_at)
+         VALUES (?,?,?,?,?,?,?,?,NOW())`,
+        [
+          lockedAssignment.id,
+          request.auth.driverId,
+          request.body.latitude,
+          request.body.longitude,
+          request.body.heading ?? null,
+          request.body.speed ?? null,
+          request.body.accuracy ?? null,
+          request.body.recordedAt.slice(0, 19).replace('T', ' '),
+        ],
+      );
+      return lockedAssignment;
     });
     const viewers = await query(
       `SELECT DISTINCT u.id AS userId
