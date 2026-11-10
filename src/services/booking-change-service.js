@@ -4,6 +4,9 @@ import { calculateQuote } from './pricing.js';
 import { listAvailableVehicles } from './vehicle-availability.js';
 import { getVerifiedRouteKm } from './google-maps.js';
 import { billableUnits, LEGACY_SERVICE_TYPES } from './legacy-pricing-rules.js';
+import {currentNativeLocation} from './native-locations.js';
+import {syncNativeCommissions,markNativeFinancialChange} from './native-financials.js';
+import {discountQuoteLines} from './pricing-core.js';
 
 const parseJson = (value, fallback = {}) => {
   if (!value) return fallback;
@@ -38,7 +41,7 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
   const [reservations] = await connection.execute(
     `SELECT r.*,arm.service_code,arm.lifecycle_status
        FROM reservations r
-       JOIN reservations arm ON arm.id=r.id AND arm.service_code IS NOT NULL
+       JOIN reservations arm ON arm.id=r.id
       WHERE r.id=? FOR UPDATE`,
     [changeRequest.reservation_id],
   );
@@ -50,14 +53,13 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
   );
   const draft = draftRows[0];
   const draftDetails = parseJson(draft?.details);
-  const optionSelections = changes.options ?? draftDetails.options ?? [];
 
   const [rows] = await connection.execute(
     `SELECT rd.*,rlm.vehicle_class_id,rlm.pickup_details,rlm.dropoff_details,
             rlm.passenger_count,rlm.luggage_count,rlm.flight_number
        FROM reservation_details rd
-       JOIN reservation_details rlm ON rlm.id=rd.id AND rlm.sequence_no IS NOT NULL
-      WHERE rd.reservation_id=? AND rd.deleted_at IS NULL
+       JOIN reservation_details rlm ON rlm.id=rd.id
+      WHERE rd.reservation_id=? AND rd.status=1 AND rd.deleted_at IS NULL AND COALESCE(rd.is_extra_service,0)=0
       ORDER BY rlm.sequence_no FOR UPDATE`,
     [reservation.id],
   );
@@ -75,7 +77,9 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
   }
 
   const [beforeRows] = await connection.execute(
-    'SELECT COALESCE(SUM(total_amount),0) AS total FROM reservation_costs WHERE reservation_id=? AND status=1',
+    `SELECT COALESCE(SUM(c.total_amount),0) AS total FROM reservation_costs c
+     JOIN reservation_details d ON d.id=c.reservation_details_id AND d.status=1 AND d.deleted_at IS NULL
+     WHERE c.reservation_id=? AND c.status=1`,
     [reservation.id],
   );
   const beforeTotal = round(beforeRows[0].total);
@@ -87,15 +91,18 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
   }
 
   let requiresReassignment = false;
-  let pickupCollection = false;
-  let afterTotal = 0;
+  let pickupCollection = Number(reservation.is_pick_up_and_collection)===1;
+  const [extraTotals] = await connection.execute(`SELECT COALESCE(SUM(c.total_amount),0) AS total FROM reservation_costs c
+    JOIN reservation_details d ON d.id=c.reservation_details_id AND d.status=1 AND d.deleted_at IS NULL AND d.is_extra_service=1
+    WHERE c.reservation_id=? AND c.status=1`, [reservation.id]);
+  let afterTotal = round(extraTotals[0].total);
   for (const row of rows) {
     const requested =
       (changes.legs ?? []).find((leg) => Number(leg.detailId) === Number(row.id)) ?? {};
     const currentPassenger = parseJson(row.service_details);
     const passenger = { ...currentPassenger, ...(changes.passenger ?? {}) };
-    const pickup = { ...parseJson(row.pickup_details), ...(requested.pickup ?? {}) };
-    const currentDropoff = parseJson(row.dropoff_details);
+    const pickup = { ...currentNativeLocation(row,'pickup'), ...(requested.pickup ?? {}) };
+    const currentDropoff = currentNativeLocation(row,'dropoff');
     const mergedDropoff = { ...currentDropoff, ...(requested.dropoff ?? {}) };
     const dropoff =
       requested.dropoff === null || Object.keys(mergedDropoff).length === 0 ? null : mergedDropoff;
@@ -109,11 +116,17 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
     const currentEnd = asIso(row.drop_off_date, row.drop_off_time);
     const startAt = requested.startAt ?? currentStart;
     const endAt = requested.endAt ?? currentEnd;
-    const vehicleClassId = changes.vehicleClassId ?? row.vehicle_class_id;
     const [currentVehicles] = await connection.execute(
-      'SELECT vehicle_id FROM reservation_vehicles WHERE reservation_details_id=? AND status=1 AND deleted_at IS NULL LIMIT 1',
+      'SELECT rv.vehicle_id,v.vehicle_class_id FROM reservation_vehicles rv JOIN vehicles v ON v.id=rv.vehicle_id WHERE rv.reservation_details_id=? AND rv.status=1 AND rv.deleted_at IS NULL LIMIT 1',
       [row.id],
     );
+    const currentClassId=currentVehicles[0]?.vehicle_class_id??row.vehicle_class_id;
+    const vehicleClassId=changes.vehicleClassId??currentClassId;
+    const [nativeExtras]=await connection.execute(`SELECT rental_option_id AS id,rental_option_text AS title,
+      based_on,rate_type,amount,quantity FROM reservation_optional_costs
+      WHERE reservation_details_id=? AND status=1 AND deleted_at IS NULL ORDER BY id FOR UPDATE`,[row.id]);
+    const optionSelections=changes.options??nativeExtras.map(x=>({optionId:Number(x.id),quantity:Number(x.quantity)}));
+    const existingOptions=changes.options===undefined&&Number(vehicleClassId)===Number(currentClassId)?nativeExtras:null;
     const days = billableUnits({
       serviceCode: reservation.service_code,
       startAt,
@@ -125,12 +138,12 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
     if (new Date(endAt) < new Date(startAt)) {
       throw new AppError(422, 'INVALID_BOOKING_DATES', 'Leg end must be after its start');
     }
-    const inventoryChanged = Boolean(
+    const inventoryChanged = Boolean(Object.hasOwn(changes.passenger??{},'count') || Object.hasOwn(changes.passenger??{},'luggageCount') ||
       requested.startAt ||
       requested.endAt ||
       requested.pickup ||
       Object.hasOwn(requested, 'dropoff') ||
-      Number(vehicleClassId) !== Number(row.vehicle_class_id),
+      Number(vehicleClassId) !== Number(currentClassId),
     );
     let replacementVehicleId = null;
     if (inventoryChanged) {
@@ -143,6 +156,8 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
         serviceCode: reservation.service_code,
         connection,
         excludeReservationDetailId: row.id,
+        passengerCount: passenger.count ?? row.passenger_count ?? 1,
+        luggageCount: passenger.luggageCount ?? row.luggage_count ?? 0,
       };
       const [existing] = await connection.execute(
         'SELECT vehicle_id FROM reservation_vehicles WHERE reservation_details_id=? AND status=1 AND deleted_at IS NULL FOR UPDATE',
@@ -150,7 +165,7 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
       );
       const candidates = await listAvailableVehicles(criteria);
       const preferred = candidates.find(
-        (candidate) => Number(candidate.id) === Number(existing?.vehicle_id),
+        (candidate) => Number(candidate.id) === Number(existing[0]?.vehicle_id),
       );
       const candidate = preferred ?? candidates[0];
       if (!candidate)
@@ -174,12 +189,15 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
       replacementVehicleId = candidate.id;
     }
     if (inventoryChanged) requiresReassignment = true;
-    const distanceKm = await getVerifiedRouteKm({
+    const routeChanged=Boolean(requested.pickup||Object.hasOwn(requested,'dropoff')||requested.stops||Object.hasOwn(requested,'approximateDistanceKm'));
+    const priceChanged=routeChanged||['vehicleClassId','options','insuranceType'].some(k=>Object.hasOwn(changes,k))||
+      ['startAt','endAt','requestedHours','isHourly'].some(k=>Object.hasOwn(requested,k));
+    const distanceKm = routeChanged ? await getVerifiedRouteKm({
       pickup,
       dropoff,
       stops: requested.stops ?? [],
       approximateDistanceKm: requested.approximateDistanceKm ?? row.approximate_distance,
-    });
+    }) : row.approximate_distance;
 
     await connection.execute(
       `UPDATE reservation_details
@@ -225,6 +243,11 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
       ],
     );
 
+    if(Object.hasOwn(passenger,'flightNumber')){
+      const [flights]=await connection.execute('SELECT id FROM reservation_flight_numbers WHERE reservation_details_id=? ORDER BY id DESC LIMIT 1 FOR UPDATE',[row.id]);
+      if(flights[0])await connection.execute('UPDATE reservation_flight_numbers SET flight_number=?,updated_at=NOW() WHERE id=?',[passenger.flightNumber,flights[0].id]);
+      else await connection.execute('INSERT INTO reservation_flight_numbers(reservation_id,reservation_details_id,flight_number,created_at,updated_at) VALUES (?,?,?,NOW(),NOW())',[reservation.id,row.id,passenger.flightNumber]);
+    }
     if (requested.stops || Object.hasOwn(requested, 'dropoff')) {
       await connection.execute(
         'DELETE FROM reservation_itineraries WHERE reservation_details_id=?',
@@ -250,6 +273,12 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
       }
     }
 
+    if(!priceChanged&&!inventoryChanged){
+      const [agreed]=await connection.execute(`SELECT COALESCE(SUM(total_amount),0) AS total FROM reservation_costs
+        WHERE reservation_details_id=? AND status=1`,[row.id]);
+      afterTotal=round(new Decimal(afterTotal).plus(agreed[0].total));
+      continue;
+    }
     const quote = await calculateQuote({
       serviceCode: reservation.service_code,
       vehicleClassId,
@@ -264,6 +293,7 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
       pickupCityId: pickup.cityId,
       dropoffCityId: dropoff?.cityId,
       optionSelections,
+      existingOptions,
       vehicleId: replacementVehicleId ?? currentVehicles[0]?.vehicle_id,
       pickup,
       dropoff,
@@ -278,6 +308,9 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
       );
     }
     pickupCollection ||= quote.isPickupAndCollection;
+    const [priorCosts]=await connection.execute('SELECT discount FROM reservation_costs WHERE reservation_details_id=? AND status=1 ORDER BY id DESC LIMIT 1 FOR UPDATE',[row.id]);
+    const retainedDiscount=Math.min(Number(priorCosts[0]?.discount??0),quote.lines.netCost);
+    if(retainedDiscount>0)quote.lines=discountQuoteLines(quote.lines,retainedDiscount,quote.currency);
     await connection.execute(
       'UPDATE reservation_costs SET status=0,updated_at=NOW() WHERE reservation_details_id=? AND status=1',
       [row.id],
@@ -288,17 +321,18 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
         (reservation_id,reservation_details_id,discount,base_rate,base_tax,optional_cost,
          one_way_drop_off_charge,car_with_driver_extra_cost,insurance_cost,net_cost,total_tax,
          total_amount,user_id,status,created_at,updated_at)
-       VALUES (?,?,0,?,?,?,?,?,?,?,?,?, ?,1,NOW(),NOW())`,
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?, ?,1,NOW(),NOW())`,
       [
         reservation.id,
         row.id,
+        retainedDiscount,
         quote.lines.baseRate,
         quote.lines.totalTax,
         optionalCost,
         quote.lines.oneWayCharge,
         quote.lines.chauffeurExtraCost,
         quote.lines.insuranceCost,
-        quote.lines.netCost,
+        reservation.service_code==='CAR_RENTAL'?quote.lines.netCost+quote.lines.totalTax:quote.lines.netCost,
         quote.lines.totalTax,
         quote.lines.total,
         actorUserId,
@@ -410,8 +444,7 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
 
   if (requiresReassignment) {
     await connection.execute(
-      `UPDATE reservation_drivers SET mobile_assignment_status='CANCELLED',updated_at=NOW()
-        WHERE reservation_id=? AND mobile_assignment_id IS NOT NULL AND mobile_assignment_status NOT IN ('COMPLETED','CANCELLED')`,
+      `UPDATE app_mobile_assignment_ids a JOIN reservation_drivers rd ON rd.id=a.reservation_driver_id SET a.assignment_status='CANCELLED',a.current_slot=NULL,a.updated_at=NOW(),rd.status=2 WHERE rd.reservation_id=? AND a.assignment_status NOT IN ('COMPLETED','CANCELLED')`,
       [reservation.id],
     );
   }
@@ -430,14 +463,22 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
             ? { passenger: { ...(draftDetails.passenger ?? {}), ...changes.passenger } }
             : {}),
           ...(Object.hasOwn(changes, 'notes') ? { notes: changes.notes } : {}),
-          options: optionSelections,
+          ...(changes.options!==undefined?{options:changes.options}:{}),
           insuranceType: changes.insuranceType ?? draftDetails.insuranceType,
         }),
         draft.id,
       ],
     );
   }
-  // Operations will reconcile agency_commissions after the approved change.
+  const [discountRows]=await connection.execute(`SELECT COALESCE(SUM(c.discount),0) AS amount FROM reservation_costs c
+    JOIN reservation_details d ON d.id=c.reservation_details_id AND d.status=1 AND d.deleted_at IS NULL
+    WHERE c.reservation_id=? AND c.status=1`,[reservation.id]);
+  await connection.execute('UPDATE reservations SET discount=? WHERE id=?',[discountRows[0].amount,reservation.id]);
+  const [couponRows]=await connection.execute('SELECT id FROM reservation_discount_coupons WHERE reservation_id=? AND status=1 FOR UPDATE',[reservation.id]);
+  if(couponRows.length>1)throw new AppError(409,'COUPON_REVIEW_REQUIRED','Multiple active coupon records require operations review');
+  if(couponRows[0])await connection.execute('UPDATE reservation_discount_coupons SET discount_amount=?,updated_by=?,updated_at=NOW() WHERE id=?',[discountRows[0].amount,actorUserId,couponRows[0].id]);
+  await syncNativeCommissions(connection,reservation.id,actorUserId);
+  await markNativeFinancialChange(connection,reservation.id);
   return {
     reservationId: reservation.id,
     previousLifecycleStatus: changeRequest.previous_lifecycle_status,

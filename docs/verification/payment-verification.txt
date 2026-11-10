@@ -1,0 +1,7 @@
+Observed verification summary on 10 November 2026
+
+Command: npm run payment-options:selftest
+Payment policy: 12 passed, zero failed
+Payment HTTP: 11 passed, zero failed
+Total: 23 passed
+Provider calls were mocked. Signed-route behavior is tested; real provider signature delivery is not certified.

@@ -84,8 +84,8 @@ const rental = await calculateQuote({
 assert.equal(rental.insuranceType, 'HALF');
 assert.equal(rental.insuranceIncluded, true);
 assert.equal(rental.lines.oneWayCharge, 12);
-assert.equal(rental.lines.totalTax, 33.35);
-assert.equal(rental.lines.total, 445);
+assert.equal(rental.lines.totalTax, 32.4);
+assert.equal(rental.lines.total, 444);
 
 const rentalThreeDays = await calculateQuote({
   ...common,
@@ -122,7 +122,8 @@ const chauffeurWithSeat = await calculateQuote({
   optionSelections: [{ optionId: 5, quantity: 1 }],
   connection: makeConnection({ serviceCode: 'CHAUFFEUR', withChildSeat: true }),
 });
-assert.equal(chauffeurWithSeat.lines.options[0].amount, 7);
+assert.equal(chauffeurWithSeat.lines.options[0].amount, 91);
+assert.equal(chauffeurWithSeat.lines.totalTax, 89.5);
 
 const transfer = await calculateQuote({
   ...common,
@@ -138,16 +139,6 @@ assert.equal(transfer.lines.baseRate, 1126);
 assert.equal(transfer.lines.totalTax, 91.2);
 assert.equal(transfer.lines.total, 1217);
 
-const { buildDraftQuote } = await import('../src/services/booking-service.js');
-await assert.rejects(
-  () =>
-    buildDraftQuote({
-      service_code: 'CAR_RENTAL',
-      details: { vehicleClassId: 18, legs: [{}], couponCode: 'NOT-VERIFIED' },
-    }),
-  (error) => error.code === 'COUPON_PRICING_UNAVAILABLE' && error.status === 422,
-);
-
 console.log(
-  'PASS: full quote selection & client screenshot totals for all 3 services; insurance/option billing; unsupported coupons rejected',
+  'PASS: full quote selection for all 3 services; native insurance and option quantities; base fee taxed and extras untaxed',
 );

@@ -361,18 +361,11 @@ router.post(
     );
     if (user) {
       const raw = randomToken();
-      const resetId = await transaction(async (connection) => {
-        await connection.execute(
-          `UPDATE app_password_reset_tokens SET used_at=NOW()
-            WHERE user_id=? AND used_at IS NULL`,
-          [user.id],
-        );
-        const [result] = await connection.execute(
-          `INSERT INTO app_password_reset_tokens (user_id,token_hash,expires_at,created_at)
-           VALUES (?,?,DATE_ADD(NOW(),INTERVAL 30 MINUTE),NOW())`,
-          [user.id, tokenHash(raw)],
-        );
-        return result.insertId;
+      await transaction(async (connection) => {
+        await connection.execute('SELECT id FROM users WHERE id=? FOR UPDATE',[user.id]);
+        await connection.execute('DELETE FROM password_resets WHERE email=?',[user.email]);
+        await connection.execute(`INSERT INTO password_resets (email,token,mobile_token_hash,created_at)
+          VALUES (?,?,?,NOW())`,[user.email,await hashPassword(raw),tokenHash(raw)]);
       });
 
       if (emailDeliveryEnabled()) {
@@ -383,7 +376,7 @@ router.post(
             token: raw,
           });
         } catch (error) {
-          await query('UPDATE app_password_reset_tokens SET used_at=NOW() WHERE id=?', [resetId]);
+          await query('DELETE FROM password_resets WHERE email=? AND mobile_token_hash=?', [user.email,tokenHash(raw)]);
           throw error;
         }
       } else if (env.NODE_ENV !== 'production') {
@@ -400,22 +393,15 @@ router.post(
   asyncHandler(async (request, response) => {
     await transaction(async (connection) => {
       const [rows] = await connection.execute(
-        `SELECT id,user_id FROM app_password_reset_tokens
-          WHERE token_hash=? AND used_at IS NULL AND expires_at>NOW()
-          FOR UPDATE`,
-        [tokenHash(request.body.token)],
-      );
-      const reset = rows[0];
-      if (!reset) throw notFound('The password reset token is invalid or expired');
-      await connection.execute('UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?', [
-        await hashPassword(request.body.password),
-        reset.user_id,
-      ]);
-      await connection.execute(
-        `UPDATE app_password_reset_tokens SET used_at=NOW()
-          WHERE user_id=? AND used_at IS NULL`,
-        [reset.user_id],
-      );
+        `SELECT u.id AS user_id,p.email,p.token FROM password_resets p JOIN users u ON u.email=p.email
+         WHERE p.mobile_token_hash=? AND p.created_at>DATE_SUB(NOW(),INTERVAL 30 MINUTE)
+           AND u.deleted_at IS NULL FOR UPDATE`,[tokenHash(request.body.token)]);
+      const reset=rows[0];
+      if(!reset || !(await verifyPassword(request.body.token,reset.token)))
+        throw notFound('The password reset token is invalid or expired');
+      await connection.execute('UPDATE users SET password=?,updated_at=NOW() WHERE id=?',
+        [await hashPassword(request.body.password),reset.user_id]);
+      await connection.execute('DELETE FROM password_resets WHERE email=?',[reset.email]);
       await connection.execute(
         'UPDATE app_refresh_tokens SET revoked_at = NOW() WHERE user_id = ? AND revoked_at IS NULL',
         [reset.user_id],

@@ -20,9 +20,9 @@ const quote = (serviceCode, amount, extra = {}) =>
 const rent = quote('CAR_RENTAL', 400, { oneWayCharge: 12 });
 assert.equal(rent.baseRate, 400);
 assert.equal(rent.oneWayCharge, 12);
-assert.equal(rent.totalTax, 33.35);
-assert.equal(rent.roundingAdjustment, -0.35);
-assert.equal(rent.total, 445);
+assert.equal(rent.totalTax, 32.4);
+assert.equal(rent.roundingAdjustment, -0.4);
+assert.equal(rent.total, 444);
 
 const chauffeur = quote('CHAUFFEUR', 85 * 13);
 assert.equal(chauffeur.totalTax, 89.5);
@@ -42,9 +42,9 @@ const seat = quote('CHAUFFEUR', 100, {
   optionSelections: [{ optionId: 5, quantity: 2 }],
 });
 assert.equal(seat.options[0].amount, 14);
-assert.equal(seat.taxes[0].amount, 9.25); // 114 x 8.1% = 9.234 -> 9.25
-assert.equal(seat.total, 123);
+assert.equal(seat.taxes[0].amount, 8.1); // Only base 100 is taxable; extra 14 stays in total.
+assert.equal(seat.total, 122);
 
 // Whole amount remains compatible with the legacy booking/checkout amounts.
 assert.equal(quote('CAR_RENTAL', 400, { insuranceCost: 45 * 3 }).insuranceCost, 135);
-console.log('PASS: screenshot totals (445/1195/1217 CHF), CHF 0.05 VAT, daily extras, insurance');
+console.log('PASS: base-only tax totals (444/1195/1217 CHF), CHF 0.05 VAT, extra quantities and insurance');

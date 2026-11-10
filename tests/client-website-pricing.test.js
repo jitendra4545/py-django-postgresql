@@ -23,16 +23,16 @@ const directQuote = (serviceCode, rateAmount, extras = {}) =>
     ...extras,
   });
 
-describe('client website screenshots: CHF quote arithmetic', () => {
-  it('rental: 400/day + 12 collection + 33.35 VAT = 445 payable', () => {
+describe('confirmed base-fee tax policy and CHF arithmetic', () => {
+  it('rental: 400/day + 12 untaxed collection + 32.40 VAT = 444 payable', () => {
     const q = directQuote('CAR_RENTAL', 400, { oneWayCharge: 12 });
     expect(q).toMatchObject({
       baseRate: 400,
       oneWayCharge: 12,
       netCost: 412,
-      totalTax: 33.35,
-      roundingAdjustment: -0.35,
-      total: 445,
+      totalTax: 32.4,
+      roundingAdjustment: -0.4,
+      total: 444,
     });
   });
   it('chauffeur: 13 hours * CHF 85 + CHF 89.50 VAT = CHF 1195 payable', () => {
@@ -48,7 +48,7 @@ describe('client website screenshots: CHF quote arithmetic', () => {
     const q = directQuote('TRANSFER', 1126);
     expect(q).toMatchObject({ baseRate: 1126, totalTax: 91.2, total: 1217 });
   });
-  it('keeps non-Swiss whole-unit legacy tax rounding', () => {
+  it('keeps EUR VAT cents according to the original roundVat helper', () => {
     const q = computeQuoteBreakdown({
       serviceCode: 'TRANSFER',
       rateAmount: 101.4,
@@ -59,7 +59,7 @@ describe('client website screenshots: CHF quote arithmetic', () => {
       taxes: [{ id: 1, title: 'VAT', amount: 7.7 }],
       currency: 'EUR',
     });
-    expect(q).toMatchObject({ baseRate: 101, totalTax: 8, total: 109 });
+    expect(q).toMatchObject({ baseRate: 101, totalTax: 7.78, total: 109 });
   });
 });
 
@@ -158,7 +158,7 @@ describe('DB-driven insurance and full quote selection', () => {
     });
     expect(q.lines.options[0].amount).toBe(24);
   });
-  it('uses 13 chauffeur hours as one child-seat day and exposes the km policy', async () => {
+  it('uses native chauffeur units for extras and exposes the km policy', async () => {
     klass.rental_type = 1;
     query.mockImplementation(async (sql) => {
       if (sql.includes('FROM vehicle_classes')) return [klass];
@@ -186,7 +186,7 @@ describe('DB-driven insurance and full quote selection', () => {
       includedDistanceKm: 260,
       freeKmPerHour: 20,
       extraCostPerKm: 2,
-      lines: { baseRate: 1105, chauffeurExtraCost: 0, options: [{ amount: 7 }] },
+      lines: { baseRate: 1105, chauffeurExtraCost: 0, options: [{ amount: 91 }] },
     });
   });
 });

@@ -1,3 +1,4 @@
+import { syncClientAssignments } from '../services/client-assignment-sync.js';
 import { recordBookingStatusEvent } from '../services/mobile-status-events.js';
 import { addMobileDriverExpense } from '../services/mobile-driver-expenses.js';
 import { Router } from 'express';
@@ -19,17 +20,19 @@ import { locationIntervalDecision } from '../services/tracking.js';
 
 const router = Router();
 router.use(requireAuth, requireRoles(ROLES.CHAUFFEUR));
+router.use(async (req,res,next)=>{try{await syncClientAssignments({driverId:req.auth.driverId});next();}catch(e){next(e);}});
 
 const assignmentFor = async (auth, assignmentId, connection = null, lock = false) => {
   const executor = connection ?? {
     execute: (sql, params) => query(sql, params).then((rows) => [rows]),
   };
+  if(lock)await executor.execute('SELECT id FROM app_mobile_assignment_ids WHERE id=? FOR UPDATE',[assignmentId]);
   const [rows] = await executor.execute(
-    `SELECT ada.mobile_assignment_id AS id, ada.reservation_id,
+    `SELECT ada.id AS id, ada.reservation_id,
             ada.reservation_details_id,
-            ada.mobile_legacy_reservation_driver_id AS legacy_reservation_driver_id,
-            ada.mobile_driver_id AS driver_id,
-            ada.mobile_assignment_status AS status,
+            ada.legacy_reservation_driver_id AS legacy_reservation_driver_id,
+            ada.driver_id AS driver_id,
+            ada.status AS status,
             ada.scheduled_start_at, ada.scheduled_end_at,
             ada.acknowledged_at, ada.declined_at, ada.decline_reason,
             ada.started_at, ada.completed_at, ada.assigned_by_user_id,
@@ -38,13 +41,13 @@ const assignmentFor = async (auth, assignmentId, connection = null, lock = false
             rd.pick_up_date, rd.pick_up_time, rd.drop_off_date, rd.drop_off_time,
             r.customer_id, c.full_name AS customer_name,
             rlm.pickup_details, rlm.dropoff_details, rlm.passenger_count, rlm.luggage_count,
-            rlm.flight_number
-       FROM reservation_drivers ada
+            COALESCE((SELECT fn.flight_number FROM reservation_flight_numbers fn WHERE fn.reservation_details_id=rd.id ORDER BY fn.id DESC LIMIT 1),rlm.flight_number) AS flight_number
+       FROM ${MOBILE_DRIVER_ASSIGNMENTS} ada
        JOIN reservations r ON r.id=ada.reservation_id
        JOIN reservation_details rd ON rd.id=ada.reservation_details_id
-       JOIN reservation_details rlm ON rlm.id=rd.id AND rlm.sequence_no IS NOT NULL
+       JOIN reservation_details rlm ON rlm.id=rd.id
        JOIN customers c ON c.id=r.customer_id
-      WHERE ada.mobile_assignment_id=? AND ada.mobile_driver_id=? ${lock ? 'FOR UPDATE' : ''}`,
+      WHERE ada.id=? AND ada.driver_id=? ${lock ? 'FOR UPDATE' : ''}`,
     [assignmentId, auth.driverId],
   );
   if (!rows[0]) throw notFound('Assignment not found');
@@ -154,7 +157,7 @@ router.post(
       const changed = assertAssignmentTransition(item.status, 'ACKNOWLEDGED');
       if (changed) {
         await connection.execute(
-          `UPDATE reservation_drivers SET mobile_assignment_status='ACKNOWLEDGED',acknowledged_at=NOW(),updated_at=NOW() WHERE mobile_assignment_id=?`,
+          `UPDATE app_mobile_assignment_ids SET assignment_status='ACKNOWLEDGED',acknowledged_at=NOW(),updated_at=NOW() WHERE id=?`,
           [item.id],
         );
         await recordBookingStatusEvent(connection, {
@@ -179,7 +182,7 @@ router.post(
       const item = await assignmentFor(request.auth, request.params.assignmentId, connection, true);
       assertAssignmentTransition(item.status, 'DECLINED');
       await connection.execute(
-        `UPDATE reservation_drivers SET mobile_assignment_status='DECLINED',declined_at=NOW(),decline_reason=?,updated_at=NOW() WHERE mobile_assignment_id=?`,
+        `UPDATE app_mobile_assignment_ids SET assignment_status='DECLINED',declined_at=NOW(),decline_reason=?,updated_at=NOW() WHERE id=?`,
         [request.body.reason, item.id],
       );
       await recordBookingStatusEvent(connection, {
@@ -230,7 +233,7 @@ router.post(
       if (!changed) return { ...assignment, notificationChanged: false };
       const occurredAt = request.body.occurredAt?.slice(0, 19).replace('T', ' ') ?? null;
       await connection.execute(
-        `UPDATE reservation_drivers SET mobile_assignment_status=?,started_at=IF(?='ON_THE_WAY',COALESCE(started_at,NOW()),started_at),completed_at=IF(?='COMPLETED',NOW(),completed_at),updated_at=NOW() WHERE mobile_assignment_id=?`,
+        `UPDATE app_mobile_assignment_ids SET assignment_status=?,started_at=IF(?='ON_THE_WAY',COALESCE(started_at,NOW()),started_at),completed_at=IF(?='COMPLETED',NOW(),completed_at),updated_at=NOW() WHERE id=?`,
         [request.body.status, request.body.status, request.body.status, assignment.id],
       );
       await connection.execute(
@@ -252,10 +255,13 @@ router.post(
         `SELECT COUNT(*) AS total FROM ${MOBILE_DRIVER_ASSIGNMENTS} mobile_assignment WHERE reservation_id=? AND status NOT IN ('COMPLETED','NO_SHOW','DECLINED','CANCELLED')`,
         [assignment.reservation_id],
       );
-      const reservationStatus =
-        request.body.status === 'COMPLETED' && Number(activeRows[0].total) === 0
-          ? 'COMPLETED'
-          : request.body.status;
+      let reservationStatus=request.body.status;
+      if(request.body.status==='COMPLETED' && Number(activeRows[0].total)>0){
+        const [remaining]=await connection.execute(`SELECT status FROM ${MOBILE_DRIVER_ASSIGNMENTS} a
+          WHERE reservation_id=? AND status NOT IN ('COMPLETED','NO_SHOW','DECLINED','CANCELLED') ORDER BY scheduled_start_at,id LIMIT 1`,[assignment.reservation_id]);
+        reservationStatus=['OFFERED','ACKNOWLEDGED'].includes(remaining[0]?.status)?'ASSIGNED':(remaining[0]?.status??'ASSIGNED');
+        await connection.execute('UPDATE reservation_details SET mobile_leg_status=?,updated_at=NOW() WHERE id=?',[reservationStatus,assignment.reservation_details_id]);
+      }
       await connection.execute(
         `UPDATE reservations SET lifecycle_status=?,updated_at=NOW() WHERE id=?`,
         [reservationStatus, assignment.reservation_id],

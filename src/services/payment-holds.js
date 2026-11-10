@@ -5,7 +5,7 @@ import { cancelAbandonedPayment, createPaymentIntent, isStripeConnectivityError 
 export const releasePendingHold = async (connection, reservationId) => {
   const [rows] = await connection.execute(
     `SELECT r.id FROM reservations r
-      JOIN reservations arm ON arm.id=r.id AND arm.service_code IS NOT NULL
+      JOIN reservations arm ON arm.id=r.id
       WHERE r.id=? AND r.status=0 AND r.payment_status=0
         AND arm.lifecycle_status='PAYMENT_PENDING' FOR UPDATE`,
     [reservationId],
@@ -51,7 +51,7 @@ export const sweepExpiredPaymentHolds = async () => {
               p.amount,p.currency,p.created_at AS createdAt,
               p.provider_reference AS providerReference
          FROM app_payment_transactions p
-         JOIN reservations arm ON arm.id=p.reservation_id AND arm.service_code IS NOT NULL
+         JOIN reservations arm ON arm.id=p.reservation_id
          JOIN app_quote_snapshots q ON q.id=arm.quote_snapshot_id
         WHERE arm.lifecycle_status='PAYMENT_PENDING' AND q.valid_until<NOW()
           AND p.status NOT IN ('PAID','PROCESSING','REFUNDED')

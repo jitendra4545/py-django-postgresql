@@ -14,7 +14,7 @@ const taxLineAmount = (value, currency) =>
         .times('0.05')
         .toDecimalPlaces(2)
         .toNumber()
-    : roundWhole(value);
+    : roundTwo(value);
 
 export const computeQuoteBreakdown = ({
   serviceCode,
@@ -28,6 +28,8 @@ export const computeQuoteBreakdown = ({
   oneWayCharge = 0,
   chauffeurExtraCost = 0,
   insuranceCost = 0,
+  optionBillingUnits = durationDays,
+  discount = 0,
 }) => {
   const days = Math.max(Number(durationDays) || 1, 1);
   const baseRate = money(
@@ -38,12 +40,13 @@ export const computeQuoteBreakdown = ({
   const optionLines = options.map((option) => {
     const selection = optionSelections.find((item) => Number(item.optionId) === Number(option.id));
     const quantity = Math.max(Number(selection?.quantity) || 1, 1);
-    const basisMultiplier = Number(option.based_on) === 1 ? days : 1;
+    const basisMultiplier = Number(option.based_on) === 1 ? Math.max(Number(optionBillingUnits) || 1, 1) : 1;
     // The existing public PHP booking flow charges rental_options.amount as a
     // configured amount, even when rate_type=2. Match that flow here.
     const amount = money(roundWhole(money(option.amount).times(quantity).times(basisMultiplier)));
-    if (Number(option.taxable) === 1) taxableOptions = taxableOptions.plus(amount);
-    else nonTaxableOptions = nonTaxableOptions.plus(amount);
+    // Confirmed client policy: tax the base service fee only. Keep the public
+    // response keys while classifying every selected extra as non-taxable.
+    nonTaxableOptions = nonTaxableOptions.plus(amount);
     return {
       optionId: option.id,
       title: option.title,
@@ -57,16 +60,20 @@ export const computeQuoteBreakdown = ({
   const fees = money(roundWhole(oneWayCharge))
     .plus(roundWhole(chauffeurExtraCost))
     .plus(roundWhole(insuranceCost));
-  const taxableBase = baseRate.plus(taxableOptions).plus(fees);
-  const taxLines = taxes.map((tax) => ({
-    taxId: tax.id,
-    title: tax.title,
-    ratePercent: Number(tax.amount),
-    amount: taxLineAmount(taxableBase.times(tax.amount).dividedBy(100), currency),
-  }));
+  const taxableBase = Decimal.max(0, baseRate.minus(discount));
+  // Allocate the rounded aggregate VAT by cumulative rate. The displayed lines
+  // sum exactly to the same VAT the native admin calculates on its summed rate.
+  let cumulativeRate = money(0), previousVat = money(0);
+  const taxLines = taxes.map((tax) => {
+    cumulativeRate = cumulativeRate.plus(tax.amount);
+    const cumulativeVat = money(taxLineAmount(taxableBase.times(cumulativeRate).dividedBy(100), currency));
+    const amount = cumulativeVat.minus(previousVat).toNumber();
+    previousVat = cumulativeVat;
+    return { taxId: tax.id, title: tax.title, ratePercent: Number(tax.amount), amount };
+  });
   const totalTax = taxLines.reduce((sum, item) => sum.plus(item.amount), money(0));
-  const net = taxableBase.plus(nonTaxableOptions);
-  const total = net.plus(totalTax);
+  const net = baseRate.plus(taxableOptions).plus(nonTaxableOptions).plus(fees);
+  const total = Decimal.max(0, net.minus(discount)).plus(totalTax);
   return {
     baseRate: baseRate.toNumber(),
     options: optionLines,
@@ -83,4 +90,17 @@ export const computeQuoteBreakdown = ({
     roundingAdjustment: roundTwo(money(roundWhole(total)).minus(total)),
     total: roundWhole(total),
   };
+};
+
+export const discountQuoteLines = (lines, discount, currency) => {
+  const taxable=Decimal.max(0,money(lines.baseRate).minus(discount));
+  let rate=money(0),prior=money(0);
+  const taxes=lines.taxes.map(tax=>{
+    rate=rate.plus(tax.ratePercent);
+    const vat=money(taxLineAmount(taxable.times(rate).div(100),currency));
+    const amount=vat.minus(prior).toNumber();prior=vat;
+    return {...tax,amount};
+  });
+  const total=Decimal.max(0,money(lines.netCost).minus(discount)).plus(prior);
+  return {...lines,taxes,totalTax:roundTwo(prior),roundingAdjustment:roundTwo(money(roundWhole(total)).minus(total)),total:roundWhole(total)};
 };

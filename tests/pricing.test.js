@@ -31,13 +31,13 @@ describe('pricing arithmetic', () => {
       taxes: [{ id: 1, title: 'VAT', amount: 10 }],
     });
     expect(result.baseRate).toBe(200);
-    expect(result.taxableOptions).toBe(40);
-    expect(result.nonTaxableOptions).toBe(5);
-    expect(result.totalTax).toBe(24);
-    expect(result.total).toBe(269);
+    expect(result.taxableOptions).toBe(0);
+    expect(result.nonTaxableOptions).toBe(45);
+    expect(result.totalTax).toBe(20);
+    expect(result.total).toBe(265);
   });
 
-  it('rounds the base, each tax, and the payable amount to whole units', () => {
+  it('preserves EUR VAT cents while rounding the base and payable amount', () => {
     const result = computeQuoteBreakdown({
       serviceCode: 'TRANSFER',
       rateAmount: 101.4,
@@ -48,7 +48,7 @@ describe('pricing arithmetic', () => {
       taxes: [{ id: 2, title: 'Tax', amount: 7.7 }],
     });
     expect(result.baseRate).toBe(101);
-    expect(result.taxes[0].amount).toBe(8);
+    expect(result.taxes[0].amount).toBe(7.78);
     expect(result.total).toBe(109);
   });
 });

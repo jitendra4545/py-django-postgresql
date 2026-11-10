@@ -1,3 +1,4 @@
+import { syncClientAssignments } from './client-assignment-sync.js';
 import { MOBILE_DRIVER_ASSIGNMENTS } from './driver-assignment-storage.js';
 import { forbidden, notFound } from '../common/errors.js';
 import { ROLES } from '../config/constants.js';
@@ -8,8 +9,8 @@ export const assertCustomerAccess = async (auth, customerId) => {
   if (auth.role === ROLES.AGENCY_AGENT) {
     const match = await one(
       `SELECT ac.id
-         FROM app_agent_customer_assignments ac
-        WHERE ac.agent_id = ? AND ac.customer_id = ? AND ac.status = 'ACTIVE'`,
+         FROM app_agent_customer_assignments ac JOIN customers c ON c.id=ac.customer_id AND c.deleted_at IS NULL JOIN agents a ON a.id=ac.agent_id AND a.deleted_at IS NULL
+        WHERE (c.agency_id IS NULL OR c.agency_id=ac.agency_id) AND a.agency_id=ac.agency_id AND ac.agent_id = ? AND ac.customer_id = ? AND ac.status = 'ACTIVE'`,
       [auth.agentId, customerId],
     );
     if (match) return;
@@ -19,10 +20,11 @@ export const assertCustomerAccess = async (auth, customerId) => {
 };
 
 export const getReservationForAccess = async (auth, reservationId) => {
+  await syncClientAssignments({reservationId});
   const reservation = await one(
     `SELECT r.*, arm.created_by_agent_id, arm.service_code, arm.lifecycle_status
        FROM reservations r
-       LEFT JOIN reservations arm ON arm.id=r.id AND arm.service_code IS NOT NULL
+       LEFT JOIN reservations arm ON arm.id=r.id
       WHERE r.id = ? AND r.deleted_at IS NULL`,
     [reservationId],
   );

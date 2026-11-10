@@ -1,6 +1,7 @@
 import { pool } from '../src/db/pool.js';
 import { ROLES } from '../src/config/constants.js';
 import { hashPassword } from '../src/services/passwords.js';
+import {env} from '../src/config/env.js';
 
 const email = process.env.SEED_ADMIN_EMAIL?.trim().toLowerCase();
 const password = process.env.SEED_ADMIN_PASSWORD;
@@ -15,6 +16,7 @@ if (!password || password.length < 10) {
 }
 
 try {
+  if(env.NODE_ENV==='production')throw Error('Use existing client administrator accounts in production. This helper is for local or staging test accounts.');
   const passwordHash = await hashPassword(password);
 
   const [existingUsers] = await pool.execute(
@@ -28,6 +30,8 @@ try {
   let userId;
 
   if (existingUsers[0]) {
+    if(Number(existingUsers[0].role)!==ROLES.ADMIN)throw Error('That email already belongs to another role. Use a new test administrator email.');
+    if(process.env.SEED_ADMIN_RESET!=='true')throw Error('Test administrator already exists. Set SEED_ADMIN_RESET=true only if you intend to reset that administrator password.');
     userId = existingUsers[0].id;
 
     await pool.execute(

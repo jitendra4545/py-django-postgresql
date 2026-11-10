@@ -1,4 +1,7 @@
 import { recordBookingStatusEvent } from '../services/mobile-status-events.js';
+import {assertNativePaymentBalance,markNativeFinancialChange} from '../services/native-financials.js';
+import { ACTIVE_PAYMENT_STATES, SAVED_UNPAID_STATES, updatedProviderPayload, parsePaymentPayload } from '../services/booking-payment-policy.js';
+import { initializeNativeBalanceIntent } from '../services/native-balance-intent.js';
 // import { Router } from 'express';
 // import { asyncHandler } from '../common/async-handler.js';
 // import { requireAuth } from '../common/auth.js';
@@ -83,7 +86,7 @@ import { recordBookingStatusEvent } from '../services/mobile-status-events.js';
 //       if (status === 'PAID' && previousStatus !== 'PAID') {
 //         const [reservations] = await connection.execute(
 //           `SELECT r.status,arm.lifecycle_status FROM reservations r
-//             JOIN reservations arm ON arm.id=r.id AND arm.service_code IS NOT NULL
+//             JOIN reservations arm ON arm.id=r.id
 //            WHERE r.id=? FOR UPDATE`,
 //           [payment.reservation_id],
 //         );
@@ -224,7 +227,7 @@ import { recordBookingStatusEvent } from '../services/mobile-status-events.js';
 //       `SELECT r.status AS reservationStatus, arm.lifecycle_status AS lifecycleStatus,
 //               (q.valid_until > NOW()) AS quoteIsValid
 //          FROM reservations r
-//          JOIN reservations arm ON arm.id=r.id AND arm.service_code IS NOT NULL
+//          JOIN reservations arm ON arm.id=r.id
 //          LEFT JOIN app_quote_snapshots q ON q.id=arm.quote_snapshot_id
 //         WHERE r.id=?`,
 //       [payment.reservation_id],
@@ -295,7 +298,7 @@ import { recordBookingStatusEvent } from '../services/mobile-status-events.js';
 //     await transaction(async (connection) => {
 //       await connection.execute(
 //         'UPDATE app_payment_transactions SET provider_reference=?,provider_payload=?,status=?,updated_at=NOW() WHERE id=? AND status NOT IN (\'PAID\',\'REFUNDED\',\'CANCELLED\')',
-//         [intent.providerReference, JSON.stringify(intent.raw ?? {}), intent.status, payment.id],
+//         [intent.providerReference, updatedProviderPayload(payment.provider_payload, intent.raw ?? {}), intent.status, payment.id],
 //       );
 //     });
 //     response.json({ id: payment.id, ...intent });
@@ -470,20 +473,54 @@ router.post(
              provider_payload=?,
              updated_at=NOW()
          WHERE id=?`,
-        [status, JSON.stringify(object), payment.id],
+        [status, updatedProviderPayload(payment.provider_payload, object), payment.id],
       );
 
       if (status === 'CANCELLED') {
         await releasePendingHold(connection, payment.reservation_id);
       }
 
-      if (status === 'PAID' && previousStatus !== 'PAID') {
+      if (status === 'FAILED' && previousStatus !== 'PAID') {
+        const [unpaidBookings] = await connection.execute(
+          `SELECT lifecycle_status FROM reservations WHERE id=? FOR UPDATE`,
+          [payment.reservation_id],
+        );
+        if (['PAYMENT_PENDING', 'PAYMENT_DUE'].includes(unpaidBookings[0]?.lifecycle_status)) {
+          await connection.execute(
+            `UPDATE reservations SET lifecycle_status='PAYMENT_FAILED',updated_at=NOW() WHERE id=?`,
+            [payment.reservation_id],
+          );
+          await recordBookingStatusEvent(connection, {
+            reservationId: payment.reservation_id,
+            status: 'PAYMENT_FAILED',
+            actorUserId: payment.user_id,
+            note: 'Payment failed; reservation retained for payment retry',
+          });
+        }
+      }
+
+      if (status === 'PAID' && previousStatus !== 'PAID' && event.type?.startsWith('payment_intent.')) {
+        const position=await assertNativePaymentBalance(connection,payment,{allowMismatch:true});
+        const actualAmount=Number(object.amount_received??object.amount??Math.round(payment.amount*100))/100;
+        const actualCurrency=String(object.currency??payment.currency).toUpperCase();
+        const reconcile=!position.matches || actualAmount!==Number(payment.amount) || actualCurrency!==position.currency;
+        if(reconcile){
+          if(actualCurrency===position.currency)await connection.execute(`INSERT INTO reservation_payments
+            (reservation_id,total_due,payment_amount,due_amount,payment_type,note,payment_date,status,user_id,created_at,updated_at)
+            VALUES (?,?,?,?,2,?,NOW(),1,?,NOW(),NOW())`,[payment.reservation_id,position.balance,actualAmount,Math.max(0,position.balance-actualAmount),
+            `Stripe received ${payment.provider_reference}; operations reconciliation required`,payment.user_id]);
+          await connection.execute('UPDATE app_payment_transactions SET provider_payload=? WHERE id=?',[
+            updatedProviderPayload(payment.provider_payload,{...object,reconciliationRequired:true}),payment.id]);
+          await recordBookingStatusEvent(connection,{reservationId:payment.reservation_id,status:'PAYMENT_RECONCILIATION_REQUIRED',actorUserId:payment.user_id,note:'Payment received after native financial state changed. Review the balance and any refund; booking state retained.'});
+          await markNativeFinancialChange(connection,payment.reservation_id);
+          return 'reconciliation';
+        }
         const [reservations] = await connection.execute(
           `SELECT
              r.status,
              arm.lifecycle_status
            FROM reservations r
-           JOIN reservations arm ON arm.id=r.id AND arm.service_code IS NOT NULL
+           JOIN reservations arm ON arm.id=r.id
            WHERE r.id=?
            FOR UPDATE`,
           [payment.reservation_id],
@@ -494,7 +531,7 @@ router.post(
         if (
           !reservations[0] ||
           reservations[0].status === 3 ||
-          !['PAYMENT_PENDING', 'CHANGE_PAYMENT_PENDING'].includes(reservations[0].lifecycle_status)
+          !ACTIVE_PAYMENT_STATES.includes(reservations[0].lifecycle_status)
         ) {
           return;
         }
@@ -502,7 +539,7 @@ router.post(
         await connection.execute(
           `UPDATE reservations
            SET payment_status=?,
-               status=1,
+               status=IF(status=2,2,1),
                updated_at=NOW()
            WHERE id=?`,
           [env.LEGACY_PAID_PAYMENT_STATUS, payment.reservation_id],
@@ -512,10 +549,9 @@ router.post(
           `UPDATE reservations
            SET lifecycle_status=
              CASE
-               WHEN lifecycle_status='PAYMENT_PENDING'
-                 THEN 'CONFIRMED'
-               WHEN lifecycle_status='CHANGE_PAYMENT_PENDING'
-                 THEN 'CONFIRMED'
+               WHEN lifecycle_status IN (
+                 'PAYMENT_PENDING', 'CHANGE_PAYMENT_PENDING', 'PAYMENT_DUE', 'PAYMENT_FAILED'
+               ) THEN 'CONFIRMED'
                ELSE lifecycle_status
              END,
              updated_at=NOW()
@@ -555,6 +591,7 @@ router.post(
           actorUserId: payment.user_id,
           note: 'Stripe payment confirmed',
         });
+        await markNativeFinancialChange(connection,payment.reservation_id);
       }
 
       if (status === 'REFUNDED') {
@@ -616,14 +653,7 @@ router.post(
           );
 
           await connection.execute(
-            `UPDATE reservation_drivers
-             SET mobile_assignment_status='CANCELLED',
-                 updated_at=NOW()
-             WHERE reservation_id=? AND mobile_assignment_id IS NOT NULL
-               AND mobile_assignment_status NOT IN (
-                 'COMPLETED',
-                 'CANCELLED'
-               )`,
+            `UPDATE app_mobile_assignment_ids a JOIN reservation_drivers rd ON rd.id=a.reservation_driver_id SET a.assignment_status='CANCELLED',a.current_slot=NULL,a.updated_at=NOW(),rd.status=2 WHERE rd.reservation_id=? AND a.assignment_status NOT IN ('COMPLETED','CANCELLED')`,
             [payment.reservation_id],
           );
 
@@ -753,7 +783,7 @@ router.post(
       );
     }
 
-    if (!['CREATED', 'FAILED', 'REQUIRES_ACTION'].includes(payment.status)) {
+    if (!['CREATED', 'FAILED', 'REQUIRES_ACTION', 'DEFERRED'].includes(payment.status)) {
       throw new AppError(
         409,
         'PAYMENT_NOT_RETRYABLE',
@@ -767,7 +797,7 @@ router.post(
          arm.lifecycle_status AS lifecycleStatus,
          (q.valid_until > NOW()) AS quoteIsValid
        FROM reservations r
-       JOIN reservations arm ON arm.id=r.id AND arm.service_code IS NOT NULL
+       JOIN reservations arm ON arm.id=r.id
        LEFT JOIN app_quote_snapshots q
          ON q.id=arm.quote_snapshot_id
        WHERE r.id=?`,
@@ -777,7 +807,7 @@ router.post(
     if (
       !hold ||
       Number(hold.reservationStatus) === 3 ||
-      !['PAYMENT_PENDING', 'CHANGE_PAYMENT_PENDING'].includes(hold.lifecycleStatus)
+      !ACTIVE_PAYMENT_STATES.includes(hold.lifecycleStatus)
     ) {
       throw new AppError(
         409,
@@ -786,7 +816,7 @@ router.post(
       );
     }
 
-    if (!Number(hold.quoteIsValid)) {
+    if (!SAVED_UNPAID_STATES.includes(hold.lifecycleStatus) && !Number(hold.quoteIsValid)) {
       throw new AppError(
         409,
         'PAYMENT_HOLD_EXPIRED',
@@ -795,9 +825,9 @@ router.post(
     }
 
     if (!payment.provider_reference) {
-      const age = Date.now() - new Date(payment.created_at).getTime();
+      const age = Date.now() - new Date(parsePaymentPayload(payment.provider_payload).providerAttemptStartedAt??payment.created_at).getTime();
 
-      if (!Number.isFinite(age) || age > 23 * 60 * 60_000) {
+      if (payment.status !== 'DEFERRED' && (!Number.isFinite(age) || age > 23 * 60 * 60_000)) {
         throw new AppError(
           409,
           'PAYMENT_RECONCILIATION_REQUIRED',
@@ -809,26 +839,9 @@ router.post(
     let intent;
 
     try {
-      intent =
-        payment.provider === 'mock' && payment.provider_reference
-          ? {
-              providerReference: payment.provider_reference,
-              status: 'REQUIRES_ACTION',
-              clientSecret: `mock_secret_${payment.id}`,
-              publishableKey: null,
-              raw: {
-                reservationId: payment.reservation_id,
-              },
-            }
-          : payment.provider_reference
-            ? await retrievePaymentIntent(payment.provider_reference)
-            : await createPaymentIntent({
-                paymentId: payment.id,
-                amount: payment.amount,
-                currency: payment.currency,
-                reservationId: payment.reservation_id,
-              });
+      intent = await initializeNativeBalanceIntent(payment.id,payment.reservation_id,request.auth.userId);
     } catch (error) {
+      if(error instanceof AppError) throw error;
       const code = stripeServiceErrorCode(error);
 
       console.error('Stripe payment setup/recovery failed', {
@@ -845,43 +858,6 @@ router.post(
           : 'Stripe could not initialize this payment. Check backend Stripe configuration and Stripe logs.',
       );
     }
-
-    if (['succeeded', 'processing', 'requires_capture', 'canceled'].includes(intent.stripeStatus)) {
-      // Do not retry or recharge a completed,
-      // processing, captured or canceled intent.
-      await query(
-        `UPDATE app_payment_transactions
-         SET provider_reference=?,
-             provider_payload=?,
-             updated_at=NOW()
-         WHERE id=?
-           AND status NOT IN ('PAID', 'REFUNDED')`,
-        [intent.providerReference, JSON.stringify(intent.raw ?? {}), payment.id],
-      );
-
-      throw new AppError(
-        409,
-        'STRIPE_INTENT_NOT_PAYABLE',
-        `Stripe reports ${intent.stripeStatus}; check signed webhook delivery and booking status. Do not charge again.`,
-      );
-    }
-
-    await transaction(async (connection) => {
-      await connection.execute(
-        `UPDATE app_payment_transactions
-         SET provider_reference=?,
-             provider_payload=?,
-             status=?,
-             updated_at=NOW()
-         WHERE id=?
-           AND status NOT IN (
-             'PAID',
-             'REFUNDED',
-             'CANCELLED'
-           )`,
-        [intent.providerReference, JSON.stringify(intent.raw ?? {}), intent.status, payment.id],
-      );
-    });
 
     response.json({
       id: payment.id,
@@ -910,8 +886,25 @@ router.post(
 
     await getReservationForAccess(request.auth, payment.reservation_id);
 
+    if (payment.status === 'PAID') {
+      return response.json({ id: payment.id, status: 'PAID' });
+    }
+    if (!['REQUIRES_ACTION', 'FAILED', 'CREATED'].includes(payment.status)) {
+      throw new AppError(409, 'PAYMENT_NOT_CONFIRMABLE', 'Initiate payment before confirming it');
+    }
+    const payableBooking = await one(
+      'SELECT status, lifecycle_status AS lifecycleStatus FROM reservations WHERE id=?',
+      [payment.reservation_id],
+    );
+    if (!payableBooking || Number(payableBooking.status) === 3 ||
+        !ACTIVE_PAYMENT_STATES.includes(payableBooking.lifecycleStatus)) {
+      throw new AppError(409, 'PAYMENT_HOLD_NOT_ACTIVE', 'This reservation is not payable');
+    }
     if (payment.status !== 'PAID') {
       await transaction(async (connection) => {
+        const [locked]=await connection.execute('SELECT status FROM app_payment_transactions WHERE id=? FOR UPDATE',[payment.id]);
+        if(locked[0]?.status==='PAID')return;
+        await assertNativePaymentBalance(connection,payment);
         await connection.execute(
           `UPDATE app_payment_transactions
            SET status='PAID',
@@ -923,7 +916,7 @@ router.post(
         await connection.execute(
           `UPDATE reservations
            SET payment_status=?,
-               status=1,
+               status=IF(status=2,2,1),
                updated_at=NOW()
            WHERE id=?`,
           [env.LEGACY_PAID_PAYMENT_STATUS, payment.reservation_id],
@@ -931,7 +924,7 @@ router.post(
 
         await connection.execute(
           `UPDATE reservations
-           SET lifecycle_status='CONFIRMED',
+           SET lifecycle_status=IF(status=2,'COMPLETED',IF(lifecycle_status IN ('PAYMENT_PENDING','PAYMENT_DUE','PAYMENT_FAILED','CHANGE_PAYMENT_PENDING'),'CONFIRMED',lifecycle_status)),
                updated_at=NOW()
            WHERE id=?`,
           [payment.reservation_id],
@@ -956,6 +949,7 @@ router.post(
            (?, ?, ?, ?, 2, 'Mock mobile payment', NOW(), 1, ?, NOW(), NOW())`,
           [payment.reservation_id, payment.amount, payment.amount, 0, request.auth.userId],
         );
+        await markNativeFinancialChange(connection,payment.reservation_id);
       });
     }
 

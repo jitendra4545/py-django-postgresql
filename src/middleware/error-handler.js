@@ -5,6 +5,8 @@ export const notFoundHandler = (request, _response, next) => {
 };
 
 export const errorHandler = (error, _request, response, _next) => {
+  if(error?.sqlState==='45000' && String(error.sqlMessage??error.message).includes('DL_VEHICLE_UNAVAILABLE'))error=new AppError(409,'VEHICLE_UNAVAILABLE','The vehicle was reserved by another operation; refresh availability');
+  if(['ER_LOCK_DEADLOCK','ER_LOCK_WAIT_TIMEOUT'].includes(error?.code))error=new AppError(409,'CONCURRENT_OPERATION','Another operation changed this booking. Refresh and retry.');
   if (error?.name === 'MulterError') {
     const status = error.code === 'LIMIT_FILE_SIZE' ? 413 : 422;
     return response.status(status).json({

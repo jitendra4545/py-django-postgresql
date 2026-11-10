@@ -1,0 +1,11 @@
+Observed verification summary on 10 November 2026 after base-fee-only tax correction
+
+Command: npm run build
+Syntax OK: 139 JavaScript files
+OpenAPI coverage OK: 97 operations
+Client contract gate passed: original 96 route declarations and OpenAPI bytes retained
+Vitest: 20 test files passed; 125 tests passed; no failed tests
+
+Additional commands passed: npm run pricing:selftest; npm run pricing:integration-selftest
+Tax rules: base fee only, extras excluded, coupon recalculation, CHF rounding and old-quote checkout rejection verified.
+No live provider or client hosted database was used.

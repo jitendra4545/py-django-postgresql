@@ -1,10 +1,14 @@
+import { reconcileNativeRows } from '../services/client-assignment-sync.js';
 import { recordBookingStatusEvent } from '../services/mobile-status-events.js';
 import { Router } from 'express';
 import { MOBILE_DRIVER_ASSIGNMENTS } from '../services/driver-assignment-storage.js';
 import { z } from 'zod';
 import { asyncHandler } from '../common/async-handler.js';
 import { requireAuth, requireRoles } from '../common/auth.js';
-import { conflict, notFound } from '../common/errors.js';
+import { AppError, conflict, notFound } from '../common/errors.js';
+import { syncNativeBalancePayment } from '../services/native-balance-payment.js';
+import { assertNativePaymentBalance } from '../services/native-financials.js';
+import { initializeNativeBalanceIntent } from '../services/native-balance-intent.js';
 import { validate } from '../common/validate.js';
 import { LEGACY_RESERVATION_STATUS, ROLES } from '../config/constants.js';
 import { env } from '../config/env.js';
@@ -20,9 +24,13 @@ import { hashPassword } from '../services/passwords.js';
 import { randomToken, tokenHash } from '../services/tokens.js';
 import { listAvailableVehicles } from '../services/vehicle-availability.js';
 import { emailDeliveryEnabled, sendInvitationEmail } from '../services/email.js';
+import {bufferedDriverWindow,nativeDriverWindow} from '../services/native-driver-windows.js';
+import operationsWorkspace from './operations-workspace.js';
+import {syncClientAssignments} from '../services/client-assignment-sync.js';
 
 const router = Router();
 router.use(requireAuth, requireRoles(ROLES.ADMIN, ROLES.STAFF));
+router.use(operationsWorkspace);
 const jsonValue = (value) => (typeof value === 'string' ? JSON.parse(value) : value);
 
 const invitedAccountSchema = z.object({
@@ -216,6 +224,7 @@ router.get(
         countryId: z.coerce.number().int().positive().optional(),
         cityId: z.coerce.number().int().positive().optional(),
         providerId: z.coerce.number().int().positive().optional(),
+        reservationId: z.coerce.number().int().positive().optional(),
       })
       .refine((value) => new Date(value.endAt) > new Date(value.startAt), {
         message: 'endAt must be after startAt',
@@ -225,8 +234,10 @@ router.get(
   asyncHandler(async (request, response) => {
     const start = request.query.startAt.slice(0, 19).replace('T', ' ');
     const end = request.query.endAt.slice(0, 19).replace('T', ' ');
+    await syncClientAssignments({});
+    const buffer=bufferedDriverWindow(request.query.startAt,request.query.endAt);
     const filters = [];
-    const params = [end, start];
+    const params = [buffer.end, buffer.start];
     for (const [field, column] of [
       ['countryId', 'd.country_id'],
       ['cityId', 'd.city_id'],
@@ -246,12 +257,13 @@ router.get(
           AND NOT EXISTS (
             SELECT 1 FROM ${MOBILE_DRIVER_ASSIGNMENTS} ada
              WHERE ada.driver_id=d.id
+               ${request.query.reservationId?'AND ada.reservation_id<>?':''}
                AND ada.status NOT IN ('DECLINED','COMPLETED','NO_SHOW','CANCELLED')
                AND ada.scheduled_start_at < ? AND ada.scheduled_end_at > ?
           )
           ${filters.length ? `AND ${filters.join(' AND ')}` : ''}
         ORDER BY d.full_name`,
-      params,
+      request.query.reservationId?[...params.slice(0,2),request.query.reservationId,...params.slice(2)]:params,
     );
     response.json({ items });
   }),
@@ -293,7 +305,7 @@ router.get(
               arm.service_code AS serviceCode,arm.lifecycle_status AS status,
               costs.totalAmount,arm.currency_code AS currency
          FROM reservations r
-         JOIN reservations arm ON arm.id=r.id AND arm.service_code IS NOT NULL
+         JOIN reservations arm ON arm.id=r.id
          JOIN customers c ON c.id=r.customer_id
          LEFT JOIN (
            SELECT reservation_id,SUM(total_amount) AS totalAmount
@@ -313,7 +325,7 @@ router.post(
   ),
   asyncHandler(async (request, response) => {
     const reservation = await one(
-      `SELECT r.id,arm.lifecycle_status FROM reservations r JOIN reservations arm ON arm.id=r.id AND arm.service_code IS NOT NULL WHERE r.id=? FOR UPDATE`,
+      `SELECT r.id,arm.lifecycle_status FROM reservations r JOIN reservations arm ON arm.id=r.id WHERE r.id=? FOR UPDATE`,
       [request.params.reservationId],
     );
     if (!reservation) throw notFound('Booking not found');
@@ -376,30 +388,35 @@ router.post(
     const start = request.body.scheduledStartAt.slice(0, 19).replace('T', ' ');
     const end = request.body.scheduledEndAt.slice(0, 19).replace('T', ' ');
     const role = request.body.assignmentRole;
+    await syncClientAssignments({});
     const result = await transaction(async (connection) => {
       const [details] = await connection.execute(
-        `SELECT rd.id,rd.reservation_id FROM reservation_details rd JOIN reservations arm ON arm.id=rd.reservation_id AND arm.service_code IS NOT NULL WHERE rd.id=? AND rd.reservation_id=? AND arm.lifecycle_status IN ('CONFIRMED','ASSIGNED') FOR UPDATE`,
+        `SELECT rd.*,arm.service_type FROM reservation_details rd JOIN reservations arm ON arm.id=rd.reservation_id WHERE rd.id=? AND rd.reservation_id=? AND rd.status=1 AND rd.deleted_at IS NULL AND COALESCE(rd.is_extra_service,0)=0 AND arm.status=1 AND arm.lifecycle_status NOT IN ('COMPLETED','CANCELLED','PAYMENT_PENDING','PAYMENT_FAILED') FOR UPDATE`,
         [request.params.detailId, request.params.reservationId],
       );
       if (!details[0]) throw notFound('Confirmed booking leg not found');
+      if(['COMPLETED','NO_SHOW','CANCELLED'].includes(details[0].mobile_leg_status))throw conflict('This booking leg has already ended');
+      const job=nativeDriverWindow(details[0],role);
+      if(!job)throw conflict('Booking dates do not define a valid chauffeur task');
+      const buffer=bufferedDriverWindow(job.start.replace(' ','T')+'Z',job.end.replace(' ','T')+'Z');
       const [drivers] = await connection.execute(
         'SELECT id,user_id FROM drivers WHERE id=? AND deleted_at IS NULL FOR UPDATE',
         [request.body.driverId],
       );
       if (!drivers[0]) throw notFound('Chauffeur not found');
       const [conflicts] = await connection.execute(
-        `SELECT id FROM ${MOBILE_DRIVER_ASSIGNMENTS} mobile_assignment WHERE driver_id=? AND status NOT IN ('DECLINED','COMPLETED','NO_SHOW','CANCELLED') AND scheduled_start_at < ? AND scheduled_end_at > ? LIMIT 1`,
-        [request.body.driverId, end, start],
+        `SELECT id FROM ${MOBILE_DRIVER_ASSIGNMENTS} mobile_assignment WHERE driver_id=? AND reservation_id<>? AND status NOT IN ('DECLINED','COMPLETED','NO_SHOW','CANCELLED') AND scheduled_start_at < ? AND scheduled_end_at > ? LIMIT 1`,
+        [request.body.driverId,request.params.reservationId, buffer.end, buffer.start],
       );
       if (conflicts[0]) throw conflict('The chauffeur already has an overlapping assignment');
       await connection.execute(
-        `UPDATE reservation_drivers SET mobile_assignment_status='CANCELLED',updated_at=NOW() WHERE reservation_details_id=? AND mobile_assignment_id IS NOT NULL AND mobile_assignment_role IN (?, 'BOTH') AND mobile_assignment_status NOT IN ('COMPLETED','CANCELLED','DECLINED')`,
+        `UPDATE app_mobile_assignment_ids a JOIN reservation_drivers rd ON rd.id=a.reservation_driver_id SET a.assignment_status='CANCELLED',a.current_slot=NULL,a.updated_at=NOW(),rd.pick_up_driver_id=IF(a.assignment_role IN ('PICKUP','BOTH'),NULL,rd.pick_up_driver_id),rd.drop_off_driver_id=IF(a.assignment_role IN ('DROPOFF','BOTH'),NULL,rd.drop_off_driver_id) WHERE rd.reservation_details_id=? AND a.assignment_role IN (?, 'BOTH') AND a.assignment_status NOT IN ('COMPLETED','CANCELLED','DECLINED')`,
         [request.params.detailId, role],
       );
       // The public assignment ID must remain independent of the website's
       // reservation_drivers.id (which may already have unrelated PHP records).
       const [publicId] = await connection.execute(
-        'INSERT INTO app_mobile_assignment_ids VALUES (NULL)',
+        'INSERT INTO app_mobile_assignment_ids (id) VALUES (NULL)',
       );
       const [legacy] = await connection.execute(
         `INSERT INTO reservation_drivers
@@ -428,6 +445,7 @@ router.post(
           request.auth.userId,
         ],
       );
+      await reconcileNativeRows(connection,{nativeId:legacy.insertId,notify:false});
       // Preserve the old assignmentFor/detail response's legacy driver row ID.
       await connection.execute(
         'UPDATE reservation_drivers SET mobile_legacy_reservation_driver_id=? WHERE id=?',
@@ -437,6 +455,7 @@ router.post(
         `UPDATE reservations SET lifecycle_status='ASSIGNED',updated_at=NOW() WHERE id=?`,
         [request.params.reservationId],
       );
+      await connection.execute("UPDATE reservation_details SET mobile_leg_status='ASSIGNED',updated_at=NOW() WHERE id=?",[request.params.detailId]);
       await recordBookingStatusEvent(connection, {
         reservationId: request.params.reservationId,
         reservationDetailsId: request.params.detailId,
@@ -485,6 +504,7 @@ router.get(
         cityId: z.coerce.number().int().positive().optional(),
         startAt: z.string().datetime(),
         endAt: z.string().datetime(),
+        detailId: z.coerce.number().int().positive().optional(),
       })
       .refine((value) => new Date(value.endAt) > new Date(value.startAt), {
         message: 'endAt must be after startAt',
@@ -492,7 +512,11 @@ router.get(
     'query',
   ),
   asyncHandler(async (request, response) => {
-    const items = await listAvailableVehicles(request.query);
+    let leg=null;
+    if(request.query.detailId){leg=await one('SELECT d.*,r.service_code FROM reservation_details d JOIN reservations r ON r.id=d.reservation_id WHERE d.id=? AND d.status=1 AND d.deleted_at IS NULL AND COALESCE(d.is_extra_service,0)=0',[request.query.detailId]);if(!leg)throw notFound('Active booking leg not found');}
+    const items = await listAvailableVehicles({...request.query,
+      ...(leg?{excludeReservationDetailId:leg.id,passengerCount:leg.passenger_count??1,luggageCount:leg.luggage_count??0,serviceCode:leg.service_code}:{}),
+    });
     response.json({ items });
   }),
 );
@@ -503,32 +527,32 @@ router.post(
   asyncHandler(async (request, response) => {
     const assignment = await transaction(async (connection) => {
       const [details] = await connection.execute(
-        `SELECT rd.*,rlm.vehicle_class_id FROM reservation_details rd JOIN reservation_details rlm ON rlm.id=rd.id AND rlm.sequence_no IS NOT NULL WHERE rd.id=? AND rd.reservation_id=? FOR UPDATE`,
+        `SELECT rd.*,r.service_code FROM reservation_details rd JOIN reservations r ON r.id=rd.reservation_id
+          WHERE rd.id=? AND rd.reservation_id=? AND rd.status=1 AND rd.deleted_at IS NULL AND COALESCE(rd.is_extra_service,0)=0
+          AND r.status=1 AND r.deleted_at IS NULL FOR UPDATE`,
         [request.params.detailId, request.params.reservationId],
       );
       const detail = details[0];
       if (!detail) throw notFound('Booking leg not found');
+      if(['COMPLETED','NO_SHOW','CANCELLED'].includes(detail.mobile_leg_status))throw conflict('This booking leg has already ended');
       const [vehicles] = await connection.execute(
         `SELECT v.id,v.title,v.model,v.reg_no FROM vehicles v
           WHERE v.id=? AND v.vehicle_class_id=? AND v.status=1 AND v.online_booking_status=1
             AND v.deleted_at IS NULL
-            AND EXISTS (
-              SELECT 1 FROM vehicle_cities vehicle_city
-              JOIN cities city ON city.id=vehicle_city.city_id
-               AND city.status=1 AND city.deleted_at IS NULL
-             WHERE vehicle_city.vehicle_id=v.id AND vehicle_city.deleted_at IS NULL
-               AND city.country_id=?
-               AND (?=0 OR vehicle_city.city_id=?)
-            ) FOR UPDATE`,
+          FOR UPDATE`,
         [
           request.body.vehicleId,
           detail.vehicle_class_id,
-          detail.pick_up_country_id,
-          detail.pick_up_city_id ?? 0,
-          detail.pick_up_city_id ?? 0,
         ],
       );
       if (!vehicles[0]) throw notFound('Available vehicle in the selected class not found');
+      const day=value=>value instanceof Date?value.toISOString().slice(0,10):String(value).slice(0,10);
+      const startAt=`${day(detail.pick_up_date)}T${detail.pick_up_time??'00:00:00'}Z`;
+      const endAt=`${day(detail.drop_off_date??detail.pick_up_date)}T${detail.drop_off_time??'23:59:59'}Z`;
+      const eligible=await listAvailableVehicles({vehicleClassId:detail.vehicle_class_id,countryId:detail.pick_up_country_id,cityId:detail.pick_up_city_id,
+        startAt,endAt,serviceCode:detail.service_code,passengerCount:detail.passenger_count??1,luggageCount:detail.luggage_count??0,connection,
+        excludeReservationDetailId:detail.id});
+      if(!eligible.some(v=>Number(v.id)===Number(request.body.vehicleId)))throw conflict('Vehicle is unavailable or does not meet this service and passenger requirement');
       const [oldAssignments] = await connection.execute(
         `SELECT id,vehicle_id FROM reservation_vehicles
           WHERE reservation_details_id=? AND status=1 AND deleted_at IS NULL FOR UPDATE`,
@@ -537,39 +561,6 @@ router.post(
       await connection.execute(`DELETE FROM vehicle_reserved_dates WHERE reservation_detail_id=?`, [
         detail.id,
       ]);
-      const [blocked] = await connection.execute(
-        `SELECT 'MANUAL_BLOCK' AS reason FROM vehicle_blocks vb
-          WHERE vb.vehicle_id=?
-            AND TIMESTAMP(vb.start_date,COALESCE(vb.start_time,'00:00:00')) < TIMESTAMP(?,?)
-            AND TIMESTAMP(vb.end_date,COALESCE(vb.end_time,'23:59:59')) > TIMESTAMP(?,?)
-        UNION ALL
-        SELECT 'RESERVED_DATE' AS reason FROM vehicle_reserved_dates vrd
-          WHERE vrd.vehicle_id=? AND vrd.reserved_date BETWEEN ? AND ?
-        UNION ALL
-        SELECT 'ACTIVE_ALLOCATION' AS reason FROM reservation_vehicles rv
-          WHERE rv.vehicle_id=? AND rv.reservation_details_id<>? AND rv.status=1
-            AND rv.deleted_at IS NULL
-            AND TIMESTAMP(rv.pick_up_date,COALESCE(rv.pick_up_time,'00:00:00')) < TIMESTAMP(?,?)
-            AND TIMESTAMP(COALESCE(rv.drop_off_date,rv.pick_up_date),COALESCE(rv.drop_off_time,'23:59:59')) > TIMESTAMP(?,?)
-        LIMIT 1`,
-        [
-          request.body.vehicleId,
-          detail.drop_off_date,
-          detail.drop_off_time,
-          detail.pick_up_date,
-          detail.pick_up_time,
-          request.body.vehicleId,
-          detail.pick_up_date,
-          detail.drop_off_date,
-          request.body.vehicleId,
-          detail.id,
-          detail.drop_off_date,
-          detail.drop_off_time,
-          detail.pick_up_date,
-          detail.pick_up_time,
-        ],
-      );
-      if (blocked[0]) throw conflict('Vehicle is unavailable for the selected service period');
       await connection.execute(
         `UPDATE reservation_vehicles SET status=2,deleted_at=NOW(),updated_at=NOW()
           WHERE reservation_details_id=? AND status=1`,
@@ -688,39 +679,36 @@ router.post(
         ? 'CONFIRMED'
         : item.previous_lifecycle_status;
       if (applied.difference > 0) {
-        const [created] = await connection.execute(
-          `INSERT INTO app_payment_transactions
-            (reservation_id,user_id,provider,amount,currency,status,idempotency_key,created_at,updated_at)
-           VALUES (?,?,?,?,?,'CREATED',?,NOW(),NOW())`,
-          [
-            item.reservation_id,
-            item.requested_by_user_id,
-            env.PAYMENT_PROVIDER,
-            applied.difference,
-            applied.currency,
-            `change-${item.id}`,
-          ],
-        );
+        const balance = await syncNativeBalancePayment(connection,item.reservation_id,item.requested_by_user_id,{lifecycleStatus});
+        if (balance.blocked) throw new AppError(409,'PAYMENT_RECONCILIATION_REQUIRED',balance.reason);
+        if (balance.position?.balance > 0) {
         paymentAdjustment = {
           type: 'PAYMENT',
-          paymentId: created.insertId,
-          amount: applied.difference,
-          currency: applied.currency,
+          paymentId: balance.payment.id,
+          amount: balance.position.balance,
+          currency: balance.position.currency,
         };
-        lifecycleStatus = 'CHANGE_PAYMENT_PENDING';
+        if(['PAYMENT_PENDING','PAYMENT_DUE','PAYMENT_FAILED','CONFIRMED','CHANGE_PAYMENT_PENDING'].includes(lifecycleStatus))lifecycleStatus = 'CHANGE_PAYMENT_PENDING';
+        }
       } else if (applied.difference < 0) {
+        const position = await assertNativePaymentBalance(connection,{reservation_id:item.reservation_id,amount:0,currency:''},{allowMismatch:true});
+        const credit = Math.max(0,position.paid-position.total);
+        if (credit === 0) {
+          const balance = await syncNativeBalancePayment(connection,item.reservation_id,item.requested_by_user_id,{lifecycleStatus});
+          if(balance.blocked) throw new AppError(409,'PAYMENT_RECONCILIATION_REQUIRED',balance.reason);
+        }
         const [payments] = await connection.execute(
           `SELECT * FROM app_payment_transactions
             WHERE reservation_id=? AND status IN ('PAID','PARTIALLY_REFUNDED')
             ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
           [item.reservation_id],
         );
-        if (payments[0]) {
+        if (payments[0] && credit > 0) {
           paymentAdjustment = {
             type: 'REFUND',
             paymentId: payments[0].id,
             providerReference: payments[0].provider_reference,
-            amount: Math.min(Math.abs(applied.difference), Number(payments[0].amount)),
+            amount: Math.min(credit, Number(payments[0].amount)),
           };
         }
       }
@@ -761,22 +749,7 @@ router.post(
     });
 
     if (result.paymentAdjustment?.type === 'PAYMENT') {
-      const intent = await createPaymentIntent({
-        paymentId: result.paymentAdjustment.paymentId,
-        amount: result.paymentAdjustment.amount,
-        currency: result.paymentAdjustment.currency,
-        reservationId: result.item.reservation_id,
-      });
-      await query(
-        `UPDATE app_payment_transactions
-            SET provider_reference=?,provider_payload=?,status=?,updated_at=NOW() WHERE id=?`,
-        [
-          intent.providerReference,
-          JSON.stringify(intent.raw ?? {}),
-          intent.status,
-          result.paymentAdjustment.paymentId,
-        ],
-      );
+      const intent = await initializeNativeBalanceIntent(result.paymentAdjustment.paymentId,result.item.reservation_id,result.item.requested_by_user_id);
       result.paymentAdjustment = { ...result.paymentAdjustment, ...intent };
     }
     if (result.paymentAdjustment?.type === 'REFUND') {
@@ -874,7 +847,7 @@ router.post(
           [item.reservation_id],
         );
         await connection.execute(
-          `UPDATE reservation_drivers SET mobile_assignment_status='CANCELLED',updated_at=NOW() WHERE reservation_id=? AND mobile_assignment_id IS NOT NULL AND mobile_assignment_status NOT IN ('COMPLETED','CANCELLED')`,
+          `UPDATE app_mobile_assignment_ids a JOIN reservation_drivers rd ON rd.id=a.reservation_driver_id SET a.assignment_status='CANCELLED',a.current_slot=NULL,a.updated_at=NOW(),rd.status=2 WHERE rd.reservation_id=? AND a.assignment_status NOT IN ('COMPLETED','CANCELLED')`,
           [item.reservation_id],
         );
         await connection.execute(`DELETE FROM vehicle_reserved_dates WHERE reservation_id=?`, [
@@ -939,10 +912,10 @@ router.patch(
   ),
   asyncHandler(async (request, response) => {
     const result = await query(
-      `UPDATE reservation_other_costs
-          SET mobile_expense_status=?,mobile_review_note=?,mobile_reviewed_by_user_id=?,
-              mobile_reviewed_at=NOW(),updated_at=NOW()
-        WHERE mobile_expense_id=? AND type='MOBILE_DRIVER_EXPENSE'`,
+      `UPDATE app_driver_expenses
+          SET status=?,review_note=?,reviewed_by_user_id=?,
+              reviewed_at=NOW(),updated_at=NOW()
+        WHERE id=?`,
       [
         request.body.status,
         request.body.reviewNote ?? null,
@@ -952,9 +925,9 @@ router.patch(
     );
     if (!result.affectedRows) throw notFound('Expense not found');
     const expenseOwner = await one(
-      `SELECT d.user_id AS userId FROM reservation_other_costs e
-         JOIN drivers d ON d.id=e.mobile_driver_id
-        WHERE e.mobile_expense_id=? AND e.type='MOBILE_DRIVER_EXPENSE'`,
+      `SELECT d.user_id AS userId FROM app_driver_expenses e
+         JOIN drivers d ON d.id=e.driver_id
+        WHERE e.id=?`,
       [request.params.expenseId],
     );
     if (expenseOwner?.userId) {

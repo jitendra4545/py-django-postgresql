@@ -1,3 +1,13 @@
+Current web workspace release: read docs/WEB_WORKSPACE_ADMIN_INTEGRATION.md. Existing mobile contracts are preserved; the staff workspace adds one read endpoint.
+
+# Client database compatibility release
+
+Start with [LOCAL_CLIENT_DB_SETUP.md](LOCAL_CLIENT_DB_SETUP.md). The new `npm run db:client:upgrade` command upgrades an imported local client database; `npm run db:client:verify` checks it. Runtime API routes and response shapes are preserved. Exact schema changes are in [db/SCHEMA_CHANGES.md](db/SCHEMA_CHANGES.md).
+
+For the 10 November release candidate, read [PRODUCTION_RELEASE_GUIDE.md](docs/PRODUCTION_RELEASE_GUIDE.md). It includes the native extras/pricing corrections, cross-application vehicle locking, cumulative schema delta and required real-admin/provider acceptance. Historical release notes below do not authorize replaying old migration files.
+
+The historical notes below describe earlier releases. Use the client upgrade runner for this package rather than applying individual historical SQL migrations.
+
 # Drive Luxury Backend — Release 1
 
 Production-oriented Express 5 / MySQL API for:
@@ -40,17 +50,19 @@ Rental inspections and all AI/OCR/predictive features are deferred. See [docs/RE
 
 ## Requirements
 
-- Node.js 20+
+- Node.js 22.12+ (Node 24 tested)
 - MySQL 8+
-- Existing `drive_luxury` schema. The supplied SQL export is incomplete for the fleet/rate tables, so verify against a staging clone before production.
+- Existing client MySQL 8 schema upgraded with the guarded client runner; verify against a staging clone before production.
 
 ## Setup
 
 ```bash
 cp .env.example .env
-npm install
-npm run verify:schema
-npm run migrate
+npm ci
+# Configure .env, stop both PHP and Node writers for the database upgrade
+npm run db:client:plan
+npm run db:client:upgrade
+npm run db:client:verify
 npm test
 npm run dev
 ```
@@ -65,11 +77,11 @@ Browser password-reset page: `http://localhost:3000/reset-password?token=...`
 
 1. Restore/snapshot the target database in staging.
 2. Configure Google OAuth client IDs, Infomaniak SMTP, Stripe, Expo, DB TLS and private storage credentials.
-3. Run `npm run verify:schema`.
-4. Review and apply all SQL migrations through `npm run migrate`.
+3. Run `npm run db:client:plan` and review the cumulative DBA request.
+4. In maintenance mode run `npm run db:client:upgrade` and `npm run db:client:verify`. Do not replay old migrations.
 5. Compare seasonal, duration, transfer, pickup/collection, option and tax quotes against PHP production examples.
-6. Run integration tests against a staging clone.
-7. Deploy API, then mobile clients.
+6. Complete actual PHP admin/mobile/provider acceptance on staging. Fixture integration tests require a separate disposable empty schema.
+7. Deploy the matching API and reviewed database upgrade. Existing mobile endpoints and responses are retained.
 
 ## Security decisions
 

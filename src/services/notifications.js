@@ -1,3 +1,4 @@
+import { insertNativeNotification } from './client-native-store.js';
 import { MOBILE_DRIVER_ASSIGNMENTS } from './driver-assignment-storage.js';
 import { query, transaction } from '../db/pool.js';
 import { emitToUser } from './realtime.js';
@@ -6,12 +7,7 @@ import { emitToUser } from './realtime.js';
 // the database-backed worker, so a Node restart cannot silently lose it.
 export const notifyUser = async ({ userId, type, title, body, data = {} }, connection = null) => {
   const persist = async (executor) => {
-    const [result] = await executor.execute(
-      `INSERT INTO app_notifications
-        (user_id, type, title, body, data, created_at)
-       VALUES (?, ?, ?, ?, ?, NOW())`,
-      [userId, type, title, body, JSON.stringify(data)],
-    );
+    const result = await insertNativeNotification(executor,{userId,type,title,body,data});
     await executor.execute(
       `INSERT INTO app_push_delivery_jobs
          (notification_id,user_id,status,next_attempt_at,created_at,updated_at)

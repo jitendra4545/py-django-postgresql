@@ -25,6 +25,8 @@ import { createApiAuditMiddleware } from './middleware/api-audit.js';
 import { enqueueApiAuditLog } from './services/api-audit-log.js';
 
 const openapi = JSON.parse(readFileSync(new URL('../docs/openapi.json', import.meta.url), 'utf8'));
+const operationsAddon=JSON.parse(readFileSync(new URL('../docs/operations-workspace-openapi.json',import.meta.url),'utf8'));
+Object.assign(openapi.paths,operationsAddon.paths);
 const publicDirectory = fileURLToPath(new URL('../public', import.meta.url));
 const resetPasswordPage = fileURLToPath(new URL('../public/reset-password.html', import.meta.url));
 const app = express();

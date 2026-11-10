@@ -29,7 +29,8 @@ describe('vehicle availability compatibility', () => {
     expect(operations).toContain('countryId: z.coerce.number().int().positive().optional()');
     expect(operations).toContain('cityId: z.coerce.number().int().positive().optional()');
     expect(availability).toContain('available_city.country_id=?');
-    expect(availability).toContain('available_vehicle_city.city_id=?');
+    expect(availability).toContain('vehicle_original_cities home');
+    expect(availability).toContain('home.city_id=?');
   });
 
   it('keeps fleet statuses out of the client catalog and exposes vehicles to operations only', () => {

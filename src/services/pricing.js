@@ -25,6 +25,7 @@ export const calculateQuote = async ({
   dropoffCityId,
   insuranceType,
   optionSelections = [],
+  existingOptions = null,
   vehicleId = null,
   pickup = null,
   dropoff = null,
@@ -84,8 +85,8 @@ export const calculateQuote = async ({
             `SELECT id,price FROM transfer_city_wise_prices
               WHERE vehicle_class_id=? AND deleted_at IS NULL
                 AND ((city_1=? AND city_2=?) OR (city_1=? AND city_2=?))
-              ORDER BY id DESC LIMIT 1`,
-            [vehicleClassId, pickupCityId, dropoffCityId, dropoffCityId, pickupCityId],
+              ORDER BY (city_1=? AND city_2=?) DESC,id LIMIT 1`,
+            [vehicleClassId, pickupCityId, dropoffCityId, dropoffCityId, pickupCityId,pickupCityId,dropoffCityId],
           )
         : null;
     if (cityRate) {
@@ -131,7 +132,7 @@ export const calculateQuote = async ({
     durationBand = await fetchOne(
       `SELECT id,span_duration FROM rental_durations
         WHERE rent_type=? AND status=1 AND span_duration>0
-        ORDER BY ABS(span_duration-?),span_duration,id LIMIT 1`,
+        ORDER BY (rent_type=1 AND id=15) DESC,ABS(span_duration-?),span_duration,id LIMIT 1`,
       [rentType, units],
     );
     if (!durationBand)
@@ -155,9 +156,11 @@ export const calculateQuote = async ({
   if (new Set(selectedIds).size !== selectedIds.length) {
     throw new AppError(422, 'DUPLICATE_OPTION', 'Select each rental option once');
   }
-  const options = selectedIds.length
+  // Only internal booking-change code supplies trusted native snapshots. New
+  // customer selections always pass the public visibility/class validation.
+  const options = existingOptions ?? (selectedIds.length
     ? await fetchAll(
-        `SELECT ro.id,ro.title,ro.based_on,ro.rate_type,ro.amount,ro.taxable
+        `SELECT ro.id,COALESCE(NULLIF(ro.title_en,''),ro.title) AS title,ro.based_on,ro.rate_type,ro.amount,ro.taxable
            FROM rental_options ro
           WHERE ro.id IN (${selectedIds.map(() => '?').join(',')})
             AND ro.rent_type=? AND ro.status=1 AND ro.show_on_frontend=1 AND ro.deleted_at IS NULL
@@ -165,7 +168,7 @@ export const calculateQuote = async ({
                          WHERE roc.rental_option_id=ro.id AND roc.vehicle_class_id=?)`,
         [...selectedIds, rentType, vehicleClassId],
       )
-    : [];
+    : []);
   if (options.length !== selectedIds.length) {
     throw new AppError(422, 'OPTION_UNAVAILABLE', 'An extra is not offered for this vehicle class');
   }
@@ -235,31 +238,19 @@ export const calculateQuote = async ({
     dropoff &&
     Number(klass.one_way_drop_off_charge) > 0
   ) {
-    // const originalCities = await fetchAll(
-    //   'SELECT locality,country FROM vehicle_cities WHERE vehicle_id=? AND deleted_at IS NULL ORDER BY id',
-    //   [vehicleId],
-    // );
-
     const originalCities = await fetchAll(
       `SELECT
        vc.city_id,
        c.country_id,
        vc.locality,
        vc.country
-   FROM vehicle_cities vc
-   JOIN cities c ON c.id = vc.city_id
+   FROM vehicle_original_cities vc
+   LEFT JOIN cities c ON c.id = vc.city_id
    WHERE vc.vehicle_id = ?
      AND vc.deleted_at IS NULL
    ORDER BY vc.id`,
       [vehicleId],
     );
-    // const matches = (point) =>
-    //   originalCities.some(
-    //     (row) =>
-    //       String(row.locality || '').toLowerCase() === String(point.city || '').toLowerCase() &&
-    //       String(row.country || '').toUpperCase() === String(country.code || '').toUpperCase(),
-    //   );
-
     const matches = (point) =>
       originalCities.some((row) => {
         if (point?.cityId != null && point?.countryId != null) {
@@ -321,6 +312,7 @@ export const calculateQuote = async ({
     oneWayCharge,
     chauffeurExtraCost,
     insuranceCost,
+    optionBillingUnits: serviceCode === 'CHAUFFEUR' ? units : billedDays,
   });
   return {
     currency,

@@ -9,6 +9,10 @@ import { getVerifiedRouteKm } from './google-maps.js';
 import { billableUnits, LEGACY_SERVICE_TYPES } from './legacy-pricing-rules.js';
 import { legacyReservationNumber } from './reservation-number.js';
 import { effectiveLegEndAt } from './chauffeur-hours.js';
+import { query } from '../db/pool.js';
+import { loadNativeCoupon, applyNativeCoupon, reserveNativeCoupon } from './native-coupons.js';
+import { syncNativeCommissions } from './native-financials.js';
+import { QUOTE_TAX_POLICY } from './quote-tax-policy.js';
 
 export const draftFingerprint = (draft) =>
   crypto
@@ -32,15 +36,7 @@ export const buildDraftQuote = async (draft) => {
       'Vehicle class and at least one trip leg are required',
     );
   }
-  // Do not silently accept a coupon and then charge full price. The legacy
-  // coupon rules/tables have not been supplied for this mobile backend.
-  if (details.couponCode) {
-    throw new AppError(
-      422,
-      'COUPON_PRICING_UNAVAILABLE',
-      'Coupon pricing is not configured for mobile checkout; do not apply this code',
-    );
-  }
+  const coupon = details.couponCode ? await loadNativeCoupon(query,details.couponCode) : null;
   const legQuotes = [];
   const selected = [];
   for (const [index, leg] of details.legs.entries()) {
@@ -55,6 +51,8 @@ export const buildDraftQuote = async (draft) => {
       startAt: start.toISOString(),
       endAt: end.toISOString(),
       serviceCode: draft.service_code,
+      passengerCount: details.passenger?.count ?? 1,
+      luggageCount: details.passenger?.luggageCount ?? 0,
     });
     const vehicle = candidates.find(
       (candidate) =>
@@ -101,12 +99,14 @@ export const buildDraftQuote = async (draft) => {
     throw new AppError(422, 'MIXED_CURRENCY', 'All legs in a checkout must use one currency');
   }
   const total = legQuotes.reduce((sum, leg) => sum + leg.lines.total, 0);
-  return {
+  const result = {
+    __native: { taxPolicy: QUOTE_TAX_POLICY },
     currency: legQuotes[0].currency,
     legs: legQuotes,
     total: Number(total.toFixed(2)),
     validUntil: new Date(Date.now() + 30 * 60_000).toISOString(),
   };
+  return coupon ? applyNativeCoupon(result,coupon) : result;
 };
 
 const sqlDate = (iso) => new Date(iso).toISOString().slice(0, 10);
@@ -141,7 +141,7 @@ export const createLegacyReservation = async (connection, { draft, quote, auth }
   for (const [index, leg] of details.legs.entries()) {
     const quoted = quote.legs[index];
     const from = new Date(leg.startAt);
-    const requested = new Date(leg.endAt ?? leg.startAt);
+    const requested = new Date(effectiveLegEndAt(draft.service_code,leg) ?? leg.startAt);
     const until = requested > from ? requested : new Date(from.getTime() + 3_600_000);
     const available = await listAvailableVehicles({
       vehicleClassId: details.vehicleClassId,
@@ -151,6 +151,8 @@ export const createLegacyReservation = async (connection, { draft, quote, auth }
       endAt: until.toISOString(),
       serviceCode: draft.service_code,
       connection,
+      passengerCount: details.passenger?.count ?? 1,
+      luggageCount: details.passenger?.luggageCount ?? 0,
     });
     if (!available.some((vehicle) => Number(vehicle.id) === Number(quoted.vehicleId))) {
       throw new AppError(
@@ -186,6 +188,7 @@ export const createLegacyReservation = async (connection, { draft, quote, auth }
     ],
   );
   const reservationId = reservationResult.insertId;
+  await reserveNativeCoupon(connection,{draft,quote,reservationId,actorUserId:auth.userId});
   const reservationNo = legacyReservationNumber(reservationId);
   const [conflicts] = await connection.execute(
     'SELECT id FROM reservations WHERE reservation_no=? AND id<>? LIMIT 1',
@@ -279,6 +282,9 @@ export const createLegacyReservation = async (connection, { draft, quote, auth }
         reservationId,
       ],
     );
+    if(details.passenger?.flightNumber)await connection.execute(
+      `INSERT INTO reservation_flight_numbers(reservation_id,reservation_details_id,flight_number,created_at,updated_at) VALUES (?,?,?,NOW(),NOW())`,
+      [reservationId,detailId,details.passenger.flightNumber]);
     const stops = [...(leg.stops ?? []), ...(leg.dropoff ? [leg.dropoff] : [])];
     for (const [stopIndex, stop] of stops.entries()) {
       await connection.execute(
@@ -305,17 +311,18 @@ export const createLegacyReservation = async (connection, { draft, quote, auth }
         (reservation_id, reservation_details_id, discount, base_rate, base_tax,
          optional_cost, one_way_drop_off_charge, car_with_driver_extra_cost,
          insurance_cost, net_cost, total_tax, total_amount, user_id, status, created_at, updated_at)
-       VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NOW(), NOW())`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NOW(), NOW())`,
       [
         reservationId,
         detailId,
+        quote.__native?.discounts?.[index] ?? 0,
         legQuote.lines.baseRate,
         legQuote.lines.totalTax,
         optionalCost,
         legQuote.lines.oneWayCharge,
         legQuote.lines.chauffeurExtraCost,
         legQuote.lines.insuranceCost,
-        legQuote.lines.netCost,
+        draft.service_code==='CAR_RENTAL' ? legQuote.lines.netCost+legQuote.lines.totalTax : legQuote.lines.netCost,
         legQuote.lines.totalTax,
         legQuote.lines.total,
         auth.userId,
@@ -417,7 +424,6 @@ export const createLegacyReservation = async (connection, { draft, quote, auth }
     actorUserId: auth.userId,
     note: 'Booking created from mobile application',
   });
-  // The website's Operations team owns agency_commissions. Do not write a
-  // competing calculation from the mobile checkout.
+  await syncNativeCommissions(connection,reservationId,auth.userId);
   return { reservationId, reservationNo };
 };

@@ -11,6 +11,7 @@ const modules = {
   'src/modules/telnyx-webhook.js': '/communication/telnyx',
   'src/modules/payments.js': '/payments',
   'src/modules/operations.js': '/operations',
+  'src/modules/operations-workspace.js':'/operations',
   'src/modules/notifications.js': '/notifications',
   'src/modules/documents.js': '/documents',
 };
@@ -29,6 +30,7 @@ for (const [filename, prefix] of Object.entries(modules)) {
 }
 
 const spec = JSON.parse(fs.readFileSync('docs/openapi.json', 'utf8'));
+Object.assign(spec.paths,JSON.parse(fs.readFileSync('docs/operations-workspace-openapi.json','utf8')).paths);
 const documented = new Set();
 for (const [path, pathItem] of Object.entries(spec.paths)) {
   for (const method of ['get', 'post', 'put', 'patch', 'delete']) {

@@ -58,3 +58,5 @@ export const emitToUser = (userId, event, payload) =>
 
 export const emitToConversation = (conversationId, event, payload) =>
   socketServer?.to(`conversation:${conversationId}`).emit(event, payload);
+
+export const removeUserFromConversation = (userId,conversationId) => socketServer?.in(`user:${userId}`).socketsLeave(`conversation:${conversationId}`);

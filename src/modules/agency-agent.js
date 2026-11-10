@@ -75,14 +75,14 @@ router.get(
         [request.auth.agentId],
       ),
       one(
-        `SELECT COUNT(*) AS total FROM reservations r JOIN reservations arm ON arm.id=r.id AND arm.service_code IS NOT NULL WHERE r.customer_id IN (SELECT customer_id FROM app_agent_customer_assignments WHERE agent_id=? AND status='ACTIVE') AND arm.lifecycle_status NOT IN ('COMPLETED','CANCELLED')`,
+        `SELECT COUNT(*) AS total FROM reservations r JOIN reservations arm ON arm.id=r.id WHERE r.customer_id IN (SELECT customer_id FROM app_agent_customer_assignments WHERE agent_id=? AND status='ACTIVE') AND arm.lifecycle_status NOT IN ('COMPLETED','CANCELLED')`,
         [request.auth.agentId],
       ),
       one(`SELECT COUNT(*) AS total FROM app_notifications WHERE user_id=? AND read_at IS NULL`, [
         request.auth.userId,
       ]),
       one(
-        `SELECT COALESCE(SUM(ac.due_amount),0) AS dueAmount, COALESCE(SUM(ac.paid_amount),0) AS paidAmount FROM agency_commissions ac WHERE ac.agency_id=? AND ac.deleted_at IS NULL`,
+        `SELECT COALESCE(SUM(ac.due_amount),0) AS dueAmount, COALESCE(SUM(ac.paid_amount),0) AS paidAmount FROM agency_commissions ac WHERE ac.agency_id=? AND ac.status=1 AND ac.deleted_at IS NULL`,
         [request.auth.agencyId],
       ),
     ]);
@@ -104,13 +104,13 @@ router.get(
       `SELECT c.id, c.full_name AS fullName, c.email, c.phone_no AS phone,
             c.city, c.country, aca.notes, aca.assigned_at AS assignedAt
        FROM app_agent_customer_assignments aca JOIN customers c ON c.id=aca.customer_id
-      WHERE aca.agent_id=? AND aca.status='ACTIVE' AND c.deleted_at IS NULL
+      WHERE aca.agent_id=? AND aca.status='ACTIVE' AND (c.agency_id IS NULL OR c.agency_id=aca.agency_id) AND c.deleted_at IS NULL
         AND (c.full_name LIKE ? OR c.email LIKE ? OR c.phone_no LIKE ?)
       ORDER BY c.full_name LIMIT ? OFFSET ?`,
       [request.auth.agentId, search, search, search, perPage, offset],
     );
     const total = await one(
-      `SELECT COUNT(*) AS total FROM app_agent_customer_assignments aca JOIN customers c ON c.id=aca.customer_id WHERE aca.agent_id=? AND aca.status='ACTIVE' AND c.deleted_at IS NULL AND (c.full_name LIKE ? OR c.email LIKE ? OR c.phone_no LIKE ?)`,
+      `SELECT COUNT(*) AS total FROM app_agent_customer_assignments aca JOIN customers c ON c.id=aca.customer_id WHERE aca.agent_id=? AND aca.status='ACTIVE' AND (c.agency_id IS NULL OR c.agency_id=aca.agency_id) AND c.deleted_at IS NULL AND (c.full_name LIKE ? OR c.email LIKE ? OR c.phone_no LIKE ?)`,
       [request.auth.agentId, search, search, search],
     );
     response.json(pageResponse(items, Number(total.total), page, perPage));
@@ -184,7 +184,7 @@ router.get(
   '/clients/:customerId',
   asyncHandler(async (request, response) => {
     const client = await one(
-      `SELECT c.id,c.full_name AS fullName,c.email,c.phone_no AS phone,c.city,c.country,aca.preferences,aca.notes FROM app_agent_customer_assignments aca JOIN customers c ON c.id=aca.customer_id WHERE aca.agent_id=? AND c.id=? AND aca.status='ACTIVE'`,
+      `SELECT c.id,c.full_name AS fullName,c.email,c.phone_no AS phone,c.city,c.country,aca.preferences,aca.notes FROM app_agent_customer_assignments aca JOIN customers c ON c.id=aca.customer_id WHERE aca.agent_id=? AND c.id=? AND aca.status='ACTIVE' AND (c.agency_id IS NULL OR c.agency_id=aca.agency_id)`,
       [request.auth.agentId, request.params.customerId],
     );
     if (!client) throw notFound('Client not found in your roster');
@@ -201,7 +201,7 @@ router.get(
     );
     if (!membership) throw notFound('Client not found in your roster');
     const items = await query(
-      `SELECT r.id,r.reservation_no AS reservationNo,arm.service_code AS serviceCode,arm.lifecycle_status AS status,MIN(rd.pick_up_date) AS serviceDate FROM reservations r JOIN reservations arm ON arm.id=r.id AND arm.service_code IS NOT NULL LEFT JOIN reservation_details rd ON rd.reservation_id=r.id WHERE r.customer_id=? AND r.deleted_at IS NULL GROUP BY r.id,arm.service_code,arm.lifecycle_status ORDER BY r.created_at DESC`,
+      `SELECT r.id,r.reservation_no AS reservationNo,arm.service_code AS serviceCode,arm.lifecycle_status AS status,MIN(rd.pick_up_date) AS serviceDate FROM reservations r JOIN reservations arm ON arm.id=r.id LEFT JOIN reservation_details rd ON rd.reservation_id=r.id WHERE r.customer_id=? AND r.deleted_at IS NULL GROUP BY r.id,arm.service_code,arm.lifecycle_status ORDER BY r.created_at DESC`,
       [request.params.customerId],
     );
     response.json({ items });
@@ -212,7 +212,7 @@ router.get(
   '/commissions',
   asyncHandler(async (request, response) => {
     const items = await query(
-      `SELECT ac.id,ac.reservation_id AS reservationId,ac.commission_amount AS commissionAmount,ac.paid_amount AS paidAmount,ac.due_amount AS dueAmount,ac.commission_percentage AS commissionPercentage,ac.status,ac.created_at AS createdAt FROM agency_commissions ac WHERE ac.agency_id=? AND ac.deleted_at IS NULL ORDER BY ac.created_at DESC LIMIT 200`,
+      `SELECT ac.id,ac.reservation_id AS reservationId,ac.commission_amount AS commissionAmount,ac.paid_amount AS paidAmount,ac.due_amount AS dueAmount,ac.commission_percentage AS commissionPercentage,ac.status,ac.created_at AS createdAt FROM agency_commissions ac WHERE ac.agency_id=? AND ac.status=1 AND ac.deleted_at IS NULL ORDER BY ac.created_at DESC LIMIT 200`,
       [request.auth.agencyId],
     );
     response.json({ items });

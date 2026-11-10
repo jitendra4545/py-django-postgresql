@@ -1,3 +1,4 @@
+import { insertNativeMessage } from '../services/client-native-store.js';
 import { MOBILE_DRIVER_ASSIGNMENTS } from '../services/driver-assignment-storage.js';
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
@@ -52,7 +53,7 @@ router.get(
               (SELECT COUNT(*) FROM app_messages unread
                 WHERE unread.conversation_id=c.id AND unread.deleted_at IS NULL
                   AND unread.sender_user_id<>?
-                  AND (cp.last_read_at IS NULL OR unread.created_at>cp.last_read_at)) AS unreadCount
+                  AND EXISTS (SELECT 1 FROM reservation_message_recipients mr JOIN reservation_messages nm ON nm.id=mr.reservation_message_id WHERE COALESCE(nm.mobile_message_id,nm.id)=unread.id AND mr.user_id=cp.user_id AND mr.read_at IS NULL)) AS unreadCount
          FROM app_conversation_participants cp
          JOIN app_conversations c ON c.id=cp.conversation_id
          JOIN reservations r ON r.id=c.reservation_id
@@ -162,6 +163,9 @@ router.post(
         WHERE conversation_id=? AND user_id=? AND left_at IS NULL`,
       [readAt, request.params.conversationId, request.auth.userId],
     );
+    await query(`UPDATE reservation_message_recipients mr JOIN reservation_messages m ON m.id=mr.reservation_message_id
+      JOIN app_conversations c ON c.reservation_id=m.reservation_id SET mr.read_at=COALESCE(mr.read_at,NOW()),mr.updated_at=NOW()
+      WHERE c.id=? AND mr.user_id=? AND m.created_at<=?`,[request.params.conversationId,request.auth.userId,readAt]);
     emitToConversation(request.params.conversationId, 'conversation.read', {
       conversationId: Number(request.params.conversationId),
       userId: request.auth.userId,
@@ -216,16 +220,10 @@ router.post(
       }
     }
     const result = await transaction(async (connection) => {
-      const [created] = await connection.execute(
-        `INSERT INTO app_messages (conversation_id,sender_user_id,message_type,body,document_id,created_at) VALUES (?,?,?,?,?,NOW())`,
-        [
-          conversation.id,
-          request.auth.userId,
-          request.body.messageType,
-          request.body.body?.trim() ?? null,
-          request.body.documentId ?? null,
-        ],
-      );
+      const created = await insertNativeMessage(connection,{
+        conversationId:conversation.id,userId:request.auth.userId,
+        body:request.body.body?.trim()??null,documentId:request.body.documentId??null,
+      });
       await connection.execute('UPDATE app_conversations SET updated_at=NOW() WHERE id=?', [
         conversation.id,
       ]);

@@ -79,22 +79,25 @@ router.get(
          JOIN vehicle_classes vc
            ON vc.id=vcc.vehicle_class_id AND vc.status=1 AND vc.deleted_at IS NULL
           AND vc.can_reservation_from_website=1 AND vc.rental_type=?
-         JOIN vehicle_class_price_rates pr
+         LEFT JOIN vehicle_class_price_rates pr
            ON pr.vehicle_class_id=vc.id AND pr.country_id IN (c.id,0)
           AND pr.rent_type=? AND pr.status=1
          JOIN vehicles v
            ON v.vehicle_class_id=vc.id AND v.status=1 AND v.online_booking_status=1
           AND v.deleted_at IS NULL
         WHERE c.status=1 AND c.deleted_at IS NULL
+          AND (pr.id IS NOT NULL OR (vc.rental_type=3 AND (
+            EXISTS (SELECT 1 FROM vehicle_class_city_wise_base_rates cr WHERE cr.vehicle_class_id=vc.id AND cr.country_id=c.id AND cr.deleted_at IS NULL)
+            OR EXISTS (SELECT 1 FROM transfer_city_wise_prices tr JOIN cities tc ON tc.id=tr.city_1 OR tc.id=tr.city_2 WHERE tr.vehicle_class_id=vc.id AND tr.deleted_at IS NULL AND tc.country_id=c.id))))
           AND EXISTS (SELECT 1 FROM vehicle_service_types vst
                        WHERE vst.vehicle_id=v.id AND vst.service_type=?)
           AND EXISTS (
             SELECT 1 FROM vehicle_cities country_vehicle_city
-            JOIN cities country_city ON country_city.id=country_vehicle_city.city_id
+            LEFT JOIN cities country_city ON country_city.id=country_vehicle_city.city_id
              AND country_city.status=1 AND country_city.deleted_at IS NULL
            WHERE country_vehicle_city.vehicle_id=v.id
              AND country_vehicle_city.deleted_at IS NULL
-             AND country_city.country_id=c.id
+             AND (country_city.country_id=c.id OR UPPER(TRIM(country_vehicle_city.country))=UPPER(c.code))
           )
         ORDER BY c.name`,
       [
@@ -270,18 +273,24 @@ router.get(
     const rentType = rentTypeByService[request.query.serviceCode];
     const withDates = Boolean(request.query.startAt);
     const classes = await query(
-      `SELECT vc.id, vc.title, vc.description, vc.image,
+      `SELECT DISTINCT vc.id, vc.title, vc.description, vc.image,
               COALESCE(capacity.passengerCapacity, 0) AS passengerCapacity,
               pr.startingPrice,
               CASE WHEN country.code='CH' THEN 'CHF' ELSE 'EUR' END AS currency
          FROM vehicle_classes vc
-         JOIN countries country ON country.id=?
+         JOIN countries country ON country.id=? AND country.status=1 AND country.deleted_at IS NULL
          JOIN vehicle_class_countries vcc ON vcc.vehicle_class_id = vc.id
             AND vcc.country_id = ? AND vcc.deleted_at IS NULL
          JOIN (
-           SELECT vehicle_class_id, MIN(amount) AS startingPrice
-             FROM vehicle_class_price_rates
-            WHERE country_id IN (?, 0) AND rent_type = ? AND status = 1
+           SELECT vehicle_class_id, MIN(amount) AS startingPrice FROM (
+             SELECT vehicle_class_id,CASE WHEN rent_type=3 AND rental_duration_id=10 THEN 0 ELSE amount END AS amount
+               FROM vehicle_class_price_rates
+              WHERE country_id IN (?, 0) AND rent_type = ? AND status = 1
+             UNION ALL SELECT vehicle_class_id,base_rate FROM vehicle_class_city_wise_base_rates
+              WHERE country_id=? AND rent_type=3 AND ?=3 AND deleted_at IS NULL
+             UNION ALL SELECT tr.vehicle_class_id,tr.price FROM transfer_city_wise_prices tr
+              WHERE ?=3 AND tr.deleted_at IS NULL AND EXISTS (SELECT 1 FROM cities tc WHERE tc.id IN (tr.city_1,tr.city_2) AND tc.country_id=?)
+           ) eligible_rates
             GROUP BY vehicle_class_id
          ) pr ON pr.vehicle_class_id = vc.id
          LEFT JOIN (
@@ -301,11 +310,17 @@ router.get(
         request.query.countryId,
         request.query.countryId,
         rentType,
+        request.query.countryId,
         rentType,
+        rentType,
+        request.query.countryId,
+        rentType,
+        request.query.passengerCount,
+        request.query.startAt?.slice(0,10) ?? new Date().toISOString().slice(0,10),
         request.query.passengerCount,
         rentType,
         request.query.countryId,
-        ...(request.query.cityId ? [request.query.cityId] : []),
+        request.query.countryId,
         ...(withDates ? availabilityDateParams(request.query.startAt, request.query.endAt) : []),
       ],
     );
@@ -330,8 +345,8 @@ router.get(
   asyncHandler(async (request, response) => {
     const rentType = { CHAUFFEUR: 1, CAR_RENTAL: 2, TRANSFER: 3 }[request.query.serviceCode];
     const items = await query(
-      `SELECT id, title, description, based_on AS basedOn, rate_type AS rateType,
-              amount, taxable
+      `SELECT id, COALESCE(NULLIF(title_en,''),title) AS title, description, based_on AS basedOn, rate_type AS rateType,
+              amount, 0 AS taxable
          FROM rental_options
         WHERE rent_type = ? AND status = 1 AND show_on_frontend = 1 AND deleted_at IS NULL
           ${

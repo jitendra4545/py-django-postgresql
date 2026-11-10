@@ -62,9 +62,10 @@ export const recordBookingStatusEvent = async (connection, {
       occurredAt,
     ],
   );
+  if(reservationDetailsId!=null)await connection.execute('UPDATE reservation_details SET trip_status_updated_by=?,trip_status_updated_at=NOW() WHERE id=?',[actorUserId,reservationDetailsId]);
   if (assignmentId != null && reservationDetailsId != null) {
     const [assignments] = await connection.execute(
-      'SELECT mobile_driver_id FROM reservation_drivers WHERE mobile_assignment_id=?',
+      'SELECT driver_id AS mobile_driver_id FROM app_mobile_assignment_ids WHERE id=?',
       [assignmentId],
     );
     if (!assignments[0]) {
@@ -74,11 +75,12 @@ export const recordBookingStatusEvent = async (connection, {
       `INSERT INTO reservation_driver_statuses
        (reservation_id,reservation_details_id,driver_id,reservation_status_id,
         status,note,source,ip,created_at,updated_at,mobile_event_id,mobile_assignment_id)
-       VALUES (?,?,?,NULL,?,?,'mobile_app',NULL,NOW(),NOW(),?,?)`,
+       VALUES (?,?,?,(SELECT id FROM reservation_statuses WHERE UPPER(REPLACE(slug,'-','_'))=? LIMIT 1),?,?,'mobile_app',NULL,NOW(),NOW(),?,?)`,
       [
         reservationId,
         reservationDetailsId,
         assignments[0].mobile_driver_id,
+        status,
         status.slice(0,30),
         note?.slice(0,500) ?? null,
         publicId.insertId,

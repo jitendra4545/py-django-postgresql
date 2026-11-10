@@ -1,3 +1,4 @@
+import { insertNativeDocument } from '../services/client-native-store.js';
 import fs from 'node:fs';
 import { Router } from 'express';
 import multer from 'multer';
@@ -6,7 +7,7 @@ import { requireAuth } from '../common/auth.js';
 import { AppError, forbidden, notFound } from '../common/errors.js';
 import { env } from '../config/env.js';
 import { ROLES } from '../config/constants.js';
-import { one, query } from '../db/pool.js';
+import { one, query, transaction } from '../db/pool.js';
 import { getReservationForAccess } from '../services/access.js';
 import { localFilePath, signedDownloadUrl, storePrivateFile } from '../services/storage.js';
 
@@ -53,23 +54,11 @@ router.post(
     const reservationId = request.body.reservationId ? Number(request.body.reservationId) : null;
     if (reservationId) await getReservationForAccess(request.auth, reservationId);
     const stored = await storePrivateFile(request.file);
-    const result = await query(
-      `INSERT INTO app_documents
-      (owner_user_id, reservation_id, category, original_name, storage_disk, storage_key,
-       visibility, mime_type, size_bytes, expires_at, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'PRIVATE', ?, ?, ?, NOW(), NOW())`,
-      [
-        request.auth.userId,
-        reservationId,
-        request.body.category ?? 'GENERAL',
-        request.file.originalname.slice(0, 255),
-        stored.disk,
-        stored.key,
-        request.file.mimetype,
-        request.file.size,
-        request.body.expiresAt ?? null,
-      ],
-    );
+    const result = await transaction(connection => insertNativeDocument(connection,{
+      userId:request.auth.userId,reservationId,category:request.body.category??'GENERAL',
+      name:request.file.originalname,disk:stored.disk,key:stored.key,mime:request.file.mimetype,
+      size:request.file.size,expiresAt:request.body.expiresAt??null,
+    }));
     response.status(201).json({
       id: result.insertId,
       category: request.body.category ?? 'GENERAL',

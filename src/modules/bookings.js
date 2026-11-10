@@ -1,4 +1,9 @@
+import { insertNativeInquiry } from '../services/client-native-store.js';
 import { recordBookingStatusEvent } from '../services/mobile-status-events.js';
+import { PAYMENT_OPTIONS, paymentAction, updatedProviderPayload } from '../services/booking-payment-policy.js';
+import { bookingListStatusCondition } from '../services/booking-list-status.js';
+import { refreshNativeBalancePayment } from '../services/native-balance-payment.js';
+import { assertCurrentQuoteTaxPolicy } from '../services/quote-tax-policy.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../common/async-handler.js';
@@ -22,6 +27,7 @@ import {
 } from '../services/booking-service.js';
 import { loadBookingView } from '../services/booking-view.js';
 import { createPaymentIntent } from '../services/payment-provider.js';
+import {assertNativePaymentBalance} from '../services/native-financials.js';
 import { stripeServiceErrorCode } from '../services/stripe-network.js';
 import { loadTrackingView } from '../services/tracking.js';
 import { normalizeChauffeurDetails } from '../services/chauffeur-hours.js';
@@ -100,7 +106,10 @@ const detailsSchema = z.object({
 const bookingChangeSchema = z
   .object({
     vehicleClassId: z.number().int().positive().optional(),
-    passenger: detailsSchema.shape.passenger.partial().optional(),
+    passenger: detailsSchema.shape.passenger.omit({count:true,luggageCount:true}).partial().extend({
+      count:z.number().int().positive().max(50).optional(),
+      luggageCount:z.number().int().nonnegative().max(100).optional(),
+    }).optional(),
     legs: z
       .array(
         z.object({
@@ -118,7 +127,9 @@ const bookingChangeSchema = z
       )
       .max(20)
       .optional(),
-    options: detailsSchema.shape.options.optional(),
+    // Patch input must preserve absence. Wrapping the draft's default([])
+    // schema in optional() lets Zod inject [], which erases agreed extras.
+    options: z.array(z.object({optionId:z.number().int().positive(),quantity:z.number().int().positive().max(20).default(1)})).optional(),
     insuranceType: detailsSchema.shape.insuranceType.optional(),
     notes: z.string().max(2000).nullable().optional(),
   })
@@ -204,14 +215,17 @@ router.post(
       "UPDATE app_booking_drafts SET quote_snapshot_id = ?, status = 'QUOTED', updated_at = NOW() WHERE id = ?",
       [result.insertId, draft.id],
     );
-    response.json({ quoteId: result.insertId, ...quote });
+    const {__native,...publicQuote}=quote;
+    response.json({ quoteId: result.insertId, ...publicQuote });
   }),
 );
 
 router.post(
   '/drafts/:draftId/checkout',
+  validate(z.object({ paymentOption: z.enum(['PAY_NOW', 'PAY_LATER']).default('PAY_NOW') }).default({})),
   idempotent('BOOKING_CHECKOUT'),
   asyncHandler(async (request, response) => {
+    const paymentOption = request.body.paymentOption;
     const created = await transaction(async (connection) => {
       const draft = await getDraftForAccess(request.auth, request.params.draftId, connection, true);
       if (draft.status === 'CHECKED_OUT') throw conflict('This draft has already been checked out');
@@ -233,44 +247,76 @@ router.post(
         typeof snapshot.quote_data === 'string'
           ? JSON.parse(snapshot.quote_data)
           : snapshot.quote_data;
+      assertCurrentQuoteTaxPolicy(quote);
       const booking = await createLegacyReservation(connection, {
         draft,
         quote,
         auth: request.auth,
       });
-      await connection.execute(
+      const [createdPayment] = await connection.execute(
         `INSERT INTO app_payment_transactions
-          (reservation_id, user_id, provider, amount, currency, status, idempotency_key, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 'CREATED', ?, NOW(), NOW())`,
+          (reservation_id, user_id, provider, amount, currency, status, idempotency_key,
+           provider_payload, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
         [
           booking.reservationId,
           request.auth.userId,
           env.PAYMENT_PROVIDER,
           quote.total,
           quote.currency,
+          paymentOption === PAYMENT_OPTIONS.PAY_LATER ? 'DEFERRED' : 'CREATED',
           request.get('Idempotency-Key') ?? null,
+          JSON.stringify({ checkoutPaymentOption: paymentOption }),
         ],
       );
-      const [paymentRows] = await connection.execute('SELECT LAST_INSERT_ID() AS id');
+      if (paymentOption === PAYMENT_OPTIONS.PAY_LATER) {
+        // Persist a real reservation and its vehicle allocation, but leave the
+        // legacy paid flag at 0. Unlike a temporary PAY_NOW hold, this does not
+        // expire with the 30-minute quote.
+        await connection.execute(
+          `UPDATE reservations SET lifecycle_status='PAYMENT_DUE',updated_at=NOW() WHERE id=?`,
+          [booking.reservationId],
+        );
+        await recordBookingStatusEvent(connection, {
+          reservationId: booking.reservationId,
+          status: 'PAYMENT_DUE',
+          actorUserId: request.auth.userId,
+          note: 'Reservation saved with Pay Later; payment is outstanding',
+        });
+      }
       await connection.execute(
         "UPDATE app_booking_drafts SET status = 'CHECKED_OUT', reservation_id = ?, updated_at = NOW() WHERE id = ?",
         [booking.reservationId, draft.id],
       );
       return {
         ...booking,
-        paymentId: paymentRows[0].id,
+        paymentId: createdPayment.insertId,
         amount: quote.total,
         currency: quote.currency,
       };
     });
+    if (paymentOption === PAYMENT_OPTIONS.PAY_LATER) {
+      const payload = {
+        bookingId: created.reservationId,
+        reservationNo: created.reservationNo,
+        status: 'PAYMENT_DUE',
+        paymentOption,
+        canRetryPayment: true,
+        payment: { id: created.paymentId, status: 'DEFERRED' },
+      };
+      await storeIdempotencyResponse(request, 201, payload);
+      return response.status(201).json(payload);
+    }
     let payment;
     try {
+      await transaction(connection=>assertNativePaymentBalance(connection,{reservation_id:created.reservationId,amount:created.amount,currency:created.currency}));
       payment = await createPaymentIntent({
         paymentId: created.paymentId,
         amount: created.amount,
         currency: created.currency,
         reservationId: created.reservationId,
       });
+      await transaction(connection=>assertNativePaymentBalance(connection,{reservation_id:created.reservationId,amount:created.amount,currency:created.currency}));
     } catch (error) {
       const code = stripeServiceErrorCode(error);
       console.error('PaymentIntent initialization failed; same payment may be recovered', {
@@ -286,17 +332,30 @@ router.post(
             : 'Stripe payment setup failed; check server configuration and payment record.',
         code,
       };
-      await query(
-        `UPDATE app_payment_transactions SET status='FAILED',provider_payload=?,updated_at=NOW() WHERE id=?`,
-        [JSON.stringify({ errorCode: code }), created.paymentId],
-      );
+      await transaction(async (connection) => {
+        await connection.execute(
+          `UPDATE app_payment_transactions SET status='FAILED',provider_payload=?,updated_at=NOW() WHERE id=?`,
+          [JSON.stringify({ checkoutPaymentOption: paymentOption, errorCode: code }), created.paymentId],
+        );
+        await connection.execute(
+          `UPDATE reservations SET lifecycle_status='PAYMENT_FAILED',updated_at=NOW()
+           WHERE id=? AND lifecycle_status='PAYMENT_PENDING'`,
+          [created.reservationId],
+        );
+        await recordBookingStatusEvent(connection, {
+          reservationId: created.reservationId,
+          status: 'PAYMENT_FAILED',
+          actorUserId: request.auth.userId,
+          note: 'Initial payment setup failed; booking saved for payment retry',
+        });
+      });
     }
     if (payment.providerReference) {
       await query(
         'UPDATE app_payment_transactions SET provider_reference = ?, provider_payload = ?, status = ?, updated_at = NOW() WHERE id = ?',
         [
           payment.providerReference,
-          JSON.stringify(payment.raw ?? {}),
+          updatedProviderPayload({ checkoutPaymentOption: paymentOption }, payment.raw ?? {}),
           payment.status,
           created.paymentId,
         ],
@@ -305,6 +364,9 @@ router.post(
     const payload = {
       bookingId: created.reservationId,
       reservationNo: created.reservationNo,
+      paymentOption,
+      status: payment.status === 'FAILED' ? 'PAYMENT_FAILED' : 'PAYMENT_PENDING',
+      canRetryPayment: payment.status === 'FAILED' || payment.status === 'REQUIRES_ACTION',
       payment: { id: created.paymentId, ...payment },
     };
     await storeIdempotencyResponse(request, 201, payload);
@@ -328,18 +390,32 @@ router.get(
       );
       params.push(request.auth.agentId);
     }
-    if (request.query.status) {
-      clauses.push('arm.lifecycle_status = ?');
-      params.push(request.query.status);
+    // No status filter means ALL customer bookings, including PAY_LATER and
+    // payment failures. Optional UNPAID/UPCOMING tabs also include them.
+    const statusFilter = bookingListStatusCondition(request.query.status);
+    if (statusFilter.clause) {
+      clauses.push(statusFilter.clause);
+      params.push(...statusFilter.params);
     }
     const where = clauses.join(' AND ');
     const items = await query(
       `SELECT r.id, r.reservation_no AS reservationNo, r.customer_id AS customerId,
             arm.service_code AS serviceCode, arm.lifecycle_status AS status,
             dates.firstServiceDate, dates.lastServiceDate,
-            costs.totalAmount, arm.currency_code AS currency
+            costs.totalAmount, arm.currency_code AS currency,
+            r.status AS legacyStatus,
+            p.id AS lastPaymentId, p.status AS lastPaymentStatus,
+            p.provider_reference AS lastProviderReference,
+            p.provider_payload AS lastProviderPayload,
+            p.created_at AS lastPaymentCreatedAt,
+            (q.valid_until > NOW()) AS quoteIsValid
        FROM reservations r
-       JOIN reservations arm ON arm.id=r.id AND arm.service_code IS NOT NULL
+       JOIN reservations arm ON arm.id=r.id
+       LEFT JOIN app_quote_snapshots q ON q.id=arm.quote_snapshot_id
+       LEFT JOIN app_payment_transactions p ON p.id=(
+         SELECT MAX(p_latest.id) FROM app_payment_transactions p_latest
+         WHERE p_latest.reservation_id=r.id
+       )
        LEFT JOIN (
          SELECT reservation_id, MIN(pick_up_date) AS firstServiceDate,
                 MAX(drop_off_date) AS lastServiceDate
@@ -354,10 +430,38 @@ router.get(
       [...params, perPage, offset],
     );
     const count = await one(
-      `SELECT COUNT(*) AS total FROM reservations r JOIN reservations arm ON arm.id=r.id AND arm.service_code IS NOT NULL WHERE ${where}`,
+      `SELECT COUNT(*) AS total FROM reservations r JOIN reservations arm ON arm.id=r.id WHERE ${where}`,
       params,
     );
-    response.json(pageResponse(items, Number(count.total), page, perPage));
+    const withPayments = [];
+    for (const item of items) {
+      const balancePayment = await refreshNativeBalancePayment(item.id, request.auth.userId);
+      const {
+        lastPaymentId, lastPaymentStatus, lastProviderReference,
+        lastProviderPayload, lastPaymentCreatedAt, quoteIsValid, legacyStatus, ...booking
+      } = item;
+      if(balancePayment.lifecycleStatus) booking.status=balancePayment.lifecycleStatus;
+      const entry = {
+        ...booking,
+        ...paymentAction({
+          payment: balancePayment.payment ?? (lastPaymentId ? {
+            id: lastPaymentId,
+            status: lastPaymentStatus,
+            providerReference: lastProviderReference,
+            providerPayload: lastProviderPayload,
+            createdAt: lastPaymentCreatedAt,
+          } : null),
+          lifecycleStatus: booking.status,
+          legacyStatus,
+          quoteIsValid,
+        }),
+      };
+      if (balancePayment.blocked) entry.canRetryPayment = false;
+      withPayments.push(entry);
+    }
+    // Payment status and retry availability can change after asynchronous webhooks.
+    response.set('Cache-Control', 'no-store');
+    response.json(pageResponse(withPayments, Number(count.total), page, perPage));
   }),
 );
 
@@ -365,6 +469,7 @@ router.get(
   '/:reservationId',
   asyncHandler(async (request, response) => {
     await getReservationForAccess(request.auth, request.params.reservationId);
+    response.set('Cache-Control', 'no-store');
     response.json(await loadBookingView(request.params.reservationId));
   }),
 );
@@ -475,20 +580,9 @@ router.post(
       request.auth.role === ROLES.CLIENT ? request.auth.customerId : request.body.customerId;
     if (!customerId) throw notFound('A client must be selected');
     await assertCustomerAccess(request.auth, customerId);
-    const result = await query(
-      `INSERT INTO app_vip_requests (customer_id, agency_id, created_by_user_id, airport, terminal, service_at, passenger_count, flight_number, request_text, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'SUBMITTED', NOW(), NOW())`,
-      [
-        customerId,
-        request.auth.agencyId ?? null,
-        request.auth.userId,
-        request.body.airport,
-        request.body.terminal ?? null,
-        request.body.serviceAt.slice(0, 19).replace('T', ' '),
-        request.body.passengerCount,
-        request.body.flightNumber ?? null,
-        request.body.requestText ?? null,
-      ],
-    );
+    const result = await transaction(connection => insertNativeInquiry(connection,{
+      kind:'VIP',customerId,agencyId:request.auth.agencyId??null,userId:request.auth.userId,details:request.body,
+    }));
     response.status(201).json({ id: result.insertId, status: 'SUBMITTED' });
   }),
 );
@@ -532,18 +626,9 @@ router.post(
       request.auth.role === ROLES.CLIENT ? request.auth.customerId : request.body.customerId;
     if (!customerId) throw notFound('A client must be selected');
     await assertCustomerAccess(request.auth, customerId);
-    const result = await query(
-      `INSERT INTO app_concierge_requests (customer_id, agency_id, created_by_user_id, category, requested_for, city, request_text, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'SUBMITTED', NOW(), NOW())`,
-      [
-        customerId,
-        request.auth.agencyId ?? null,
-        request.auth.userId,
-        request.body.category,
-        request.body.requestedFor?.slice(0, 19).replace('T', ' ') ?? null,
-        request.body.city ?? null,
-        request.body.requestText,
-      ],
-    );
+    const result = await transaction(connection => insertNativeInquiry(connection,{
+      kind:'CONCIERGE',customerId,agencyId:request.auth.agencyId??null,userId:request.auth.userId,details:request.body,
+    }));
     response.status(201).json({ id: result.insertId, status: 'SUBMITTED' });
   }),
 );

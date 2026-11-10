@@ -1,5 +1,7 @@
 # Drive Luxury: pricing alignment with client booking-site screenshots
 
+Historical comparison: the client subsequently confirmed BASE_FEE_ONLY_V1 on 10 November. The active calculation taxes the base fee only and excludes extras, collection, excess distance and insurance. See CLIENT_WEBSITE_TAX_ALIGNMENT.md; earlier screenshot arithmetic below is retained as historical evidence and is superseded for the current implementation.
+
 Basis: latest supplied `backend(2).zip`, inspected on 2026-11-03. This change is limited to **source pricing arithmetic and quote metadata**. The sample prices below are *illustrative configured DB values taken from screenshots*, not proof that the Aiven/Infomaniak database currently holds the same rates. No live database, Google Routes, Stripe, or client PHP site was used during this review.
 
 ## Three reference screenshots (CHF, VAT 8.1%)

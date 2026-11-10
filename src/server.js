@@ -1,3 +1,4 @@
+import { syncClientAssignments } from './services/client-assignment-sync.js';
 import http from 'node:http';
 import { setInterval, clearInterval } from 'node:timers';
 import { Server } from 'socket.io';
@@ -24,6 +25,7 @@ server.listen(env.PORT, '0.0.0.0', () => {
 
 // Idempotent database checks permit several API replicas. Stripe intents are
 // cancelled before their unpaid vehicle hold is released.
+const assignmentSyncTimer=setInterval(()=>syncClientAssignments().catch(error=>console.error('Admin assignment reconciliation failed',{code:error.code,message:error.message})),5000);
 const sweepTimer = setInterval(() => {
   sweepExpiredPaymentHolds().catch((error) =>
     console.error('Payment hold sweep failed', { code: error.code }),
@@ -49,6 +51,7 @@ const receiptTimer = env.EXPO_PUSH_WORKER_ENABLED
 
 const shutdown = (signal) => {
   clearInterval(sweepTimer);
+  clearInterval(assignmentSyncTimer);
   if (deliveryTimer) clearInterval(deliveryTimer);
   if (receiptTimer) clearInterval(receiptTimer);
   console.log(`${signal} received; closing server`);

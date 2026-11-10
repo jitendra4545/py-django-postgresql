@@ -1,0 +1,63 @@
+{
+  "baseline": "Drive_Luxury_Native_Extras_Compatible_Backend_20261110.zip",
+  "database_objects_added": 0,
+  "original_mobile_api_operations": 96,
+  "staff_read_endpoints_added": 1,
+  "files": [
+    {
+      "file": "README.md",
+      "change": "modified",
+      "sha256": "44c40315bccd4f2b72008261bbb53eecca8cba5e05390c7c1415419766cd7f32"
+    },
+    {
+      "file": "docs/WEB_WORKSPACE_ADMIN_INTEGRATION.md",
+      "change": "new",
+      "sha256": "b81d86f3f9f162ea1a4ac163b3835f06ad6e80aa13f94522138f52b046f6bf7b"
+    },
+    {
+      "file": "docs/WEB_WORKSPACE_VERIFICATION.md",
+      "change": "new",
+      "sha256": "ac6f0c7d69812363365ca7f7c3ecb5e92d9848a14e030f3187a62049f3bf50a8"
+    },
+    {
+      "file": "docs/operations-workspace-openapi.json",
+      "change": "new",
+      "sha256": "2c63cbcfb493b99a0dc166d9f1c97742190713ea784cc751b666c4c8a71173fc"
+    },
+    {
+      "file": "scripts/check-openapi.js",
+      "change": "modified",
+      "sha256": "e03aef620b56c9d5f60b7b504a9f33bb2aa38369bfae40012e8c670740fc5fc3"
+    },
+    {
+      "file": "scripts/seed-admin.js",
+      "change": "modified",
+      "sha256": "56af922ac05cdc4f26ff61895b5eee2f98f1eb18d5065fbcdc30e59265d6c75d"
+    },
+    {
+      "file": "scripts/test-client-db-integration.mjs",
+      "change": "modified",
+      "sha256": "e2e89eb95c53665fc48161775db22280152c8ce29d661273bbf81bd041dc2ddd"
+    },
+    {
+      "file": "src/app.js",
+      "change": "modified",
+      "sha256": "31eae45ed0331d59767f30baaa2880bdbd04cd093c38c49810419c0d14f10f9e"
+    },
+    {
+      "file": "src/modules/bookings.js",
+      "change": "modified",
+      "sha256": "25be79ede0c68bb9e73feda97d81536c14b8cc70105d535b28b0985253c4be06"
+    },
+    {
+      "file": "src/modules/operations-workspace.js",
+      "change": "new",
+      "sha256": "c2748ac1027f729019a82b885caa7b9cace4626745bbce6bbf26e6e195f8f82e"
+    },
+    {
+      "file": "src/modules/operations.js",
+      "change": "modified",
+      "sha256": "f537a06ae0bb9c0b2987ed08bd01e8cea988d5256af73d379384a43e28d05062"
+    }
+  ]
+}
