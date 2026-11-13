@@ -1,3 +1,5 @@
+import {assertVehicleCapacity} from './vehicle-capacity.js';
+import { nativeServiceCodeSql, nativeLifecycleSql } from './legacy-reservation-adapter.js';
 import Decimal from 'decimal.js';
 import { AppError } from '../common/errors.js';
 import { calculateQuote } from './pricing.js';
@@ -39,7 +41,7 @@ const reserveDates = async (connection, { reservationId, detailId, vehicleId, st
 export const applyApprovedBookingChange = async (connection, { changeRequest, actorUserId }) => {
   const changes = parseJson(changeRequest.requested_changes);
   const [reservations] = await connection.execute(
-    `SELECT r.*,arm.service_code,arm.lifecycle_status
+    `SELECT r.*,${nativeServiceCodeSql()} AS service_code,${nativeLifecycleSql()} AS lifecycle_status
        FROM reservations r
        JOIN reservations arm ON arm.id=r.id
       WHERE r.id=? FOR UPDATE`,
@@ -175,6 +177,7 @@ export const applyApprovedBookingChange = async (connection, { changeRequest, ac
           `No available vehicle remains for booking leg ${row.id}`,
         );
       await connection.execute('SELECT id FROM vehicles WHERE id=? FOR UPDATE', [candidate.id]);
+      await assertVehicleCapacity(connection,candidate.id,criteria.passengerCount,criteria.luggageCount);
       if (
         !(await listAvailableVehicles(criteria)).some(
           (item) => Number(item.id) === Number(candidate.id),

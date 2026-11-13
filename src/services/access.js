@@ -1,3 +1,4 @@
+import { nativeServiceCodeSql, nativeCurrencySql, nativeLifecycleSql } from './legacy-reservation-adapter.js';
 import { syncClientAssignments } from './client-assignment-sync.js';
 import { MOBILE_DRIVER_ASSIGNMENTS } from './driver-assignment-storage.js';
 import { forbidden, notFound } from '../common/errors.js';
@@ -10,8 +11,10 @@ export const assertCustomerAccess = async (auth, customerId) => {
     const match = await one(
       `SELECT ac.id
          FROM app_agent_customer_assignments ac JOIN customers c ON c.id=ac.customer_id AND c.deleted_at IS NULL JOIN agents a ON a.id=ac.agent_id AND a.deleted_at IS NULL
-        WHERE (c.agency_id IS NULL OR c.agency_id=ac.agency_id) AND a.agency_id=ac.agency_id AND ac.agent_id = ? AND ac.customer_id = ? AND ac.status = 'ACTIVE'`,
-      [auth.agentId, customerId],
+        WHERE (c.agency_id IS NULL OR c.agency_id=ac.agency_id)
+          AND a.agency_id=ac.agency_id AND ac.agency_id=?
+          AND ac.agent_id = ? AND ac.customer_id = ? AND ac.status = 'ACTIVE'`,
+      [auth.agencyId, auth.agentId, customerId],
     );
     if (match) return;
   }
@@ -22,7 +25,7 @@ export const assertCustomerAccess = async (auth, customerId) => {
 export const getReservationForAccess = async (auth, reservationId) => {
   await syncClientAssignments({reservationId});
   const reservation = await one(
-    `SELECT r.*, arm.created_by_agent_id, arm.service_code, arm.lifecycle_status
+    `SELECT r.*, ${nativeServiceCodeSql()} AS service_code, ${nativeLifecycleSql()} AS lifecycle_status, ${nativeCurrencySql()} AS currency_code
        FROM reservations r
        LEFT JOIN reservations arm ON arm.id=r.id
       WHERE r.id = ? AND r.deleted_at IS NULL`,

@@ -302,7 +302,7 @@ Dashboard | Clients | Bookings | Commissions | Notifications | Account
 | Google login            | `POST /auth/google`                        | Login to an existing active invited Agent account                        |
 | Profile details         | `GET /agent/profile`                       | Load Agent contact, agency, type and language                            |
 | Edit profile            | `PATCH /agent/profile`                     | Update name, phone, address and language                                 |
-| Dashboard               | `GET /agent/dashboard`                     | Client count, active booking count, unread alerts and commission summary |
+| Dashboard               | `GET /agent/dashboard`                     | Assigned-client count, agency-wide active booking count, unread alerts and live agency commission summary |
 | Client roster           | `GET /agent/clients?page=...&search=...`   | Only explicitly assigned clients                                         |
 | Create client           | `POST /agent/clients`                      | Create and automatically assign a Client                                 |
 | Client contact card     | `GET /agent/clients/{customerId}`          | Contact and stored preferences                                           |

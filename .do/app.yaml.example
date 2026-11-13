@@ -122,6 +122,10 @@ services:
         scope: RUN_TIME
         type: SECRET
         value: CHANGE_ME
+      - key: STRIPE_PUBLISHABLE_KEY
+        scope: RUN_TIME
+        type: SECRET
+        value: CHANGE_ME
       - key: STRIPE_WEBHOOK_SECRET
         scope: RUN_TIME
         type: SECRET

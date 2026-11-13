@@ -43,7 +43,24 @@ export async function insertNativeDocument(connection, { userId,reservationId,ca
      mobile_category,mobile_expires_at,mobile_visibility,mobile_original_name,mobile_media_file_id)
     VALUES (?,?,?, ?,?,?,?,NOW(),NOW(),?,?,'PRIVATE',?,?)`,
   [randomUUID(),disk,'',key,name.slice(0,191),name.split('.').pop() ?? '',userId,category,expiresAt,name,media.insertId]);
-  await connection.execute('UPDATE file_managers SET mobile_document_id=id WHERE id=?',[file.insertId]);
+  // The existing driver-expense FK targets app_documents. Allocate the public
+  // document ID there, while file_managers/media_files remain the native source.
+  const [maxima]=await connection.execute(`SELECT
+    (SELECT COALESCE(MAX(id),0) FROM app_documents) AS app_max,
+    (SELECT COALESCE(MAX(mobile_document_id),0) FROM file_managers) AS native_max`);
+  let documentId=Math.max(Number(maxima[0].app_max),Number(maxima[0].native_max))+1;
+  for(let attempt=0;;attempt++,documentId++) {
+    try {
+    // An explicit identity avoids collisions with previously allocated native
+    // IDs when the historical app_documents store is empty or behind.
+    await connection.execute(`INSERT INTO app_documents
+      (id,owner_user_id,reservation_id,category,original_name,storage_disk,storage_key,visibility,mime_type,size_bytes,expires_at,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,'PRIVATE',?,?,?,NOW(),NOW())`,
+    [documentId,userId,reservationId,category,name,disk,key,mime,size,expiresAt]);
+    break;
+    }catch(error){if(error.code!=='ER_DUP_ENTRY'||attempt>=20)throw error;}
+  }
+  await connection.execute('UPDATE file_managers SET mobile_document_id=? WHERE id=?',[documentId,file.insertId]);
   if (reservationId) await connection.execute(`INSERT INTO reservation_files
     (reservation_id,file_path,mobile_file_manager_id,user_id,created_at,updated_at) VALUES (?,?,?,?,NOW(),NOW())`,[reservationId,key,file.insertId,userId]);
   else {
@@ -52,7 +69,7 @@ export async function insertNativeDocument(connection, { userId,reservationId,ca
     if(customers[0]) await connection.execute('INSERT INTO customer_files (customer_id,file_path,mobile_file_manager_id,created_at,updated_at) VALUES (?,?,?,NOW(),NOW())',[customers[0].id,key,file.insertId]);
     if(drivers[0]) await connection.execute('INSERT INTO driver_files (driver_id,file_path,mobile_file_manager_id,created_at,updated_at) VALUES (?,?,?,NOW(),NOW())',[drivers[0].id,key,file.insertId]);
   }
-  return file;
+  return { ...file, insertId:documentId };
 }
 
 export async function insertNativeInquiry(connection,{kind,customerId,agencyId,userId,details}) {

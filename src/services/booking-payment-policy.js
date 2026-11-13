@@ -47,7 +47,7 @@ export const checkoutPaymentOption = (payload) => {
 export const updatedProviderPayload = (previous, latest) => {
   const before = parsePaymentPayload(previous);
   const after = parsePaymentPayload(latest);
-  const retained = Object.fromEntries(['purpose','nativeTotal','nativePaid','providerAttemptStartedAt','reconciliationRequired']
+  const retained = Object.fromEntries(['purpose','nativeTotal','nativePaid','providerAttemptStartedAt','reconciliationRequired','providerAttemptKey','retiredProviderReferences']
     .filter(key => Object.hasOwn(before,key)).map(key=>[key,before[key]]));
   return JSON.stringify({ ...retained, ...after, ...(before.checkoutPaymentOption
     ? { checkoutPaymentOption: checkoutPaymentOption(before) }

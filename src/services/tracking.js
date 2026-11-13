@@ -37,6 +37,7 @@ export const loadTrackingView = async (reservationId) => {
        FROM ${MOBILE_DRIVER_ASSIGNMENTS} ada
        JOIN drivers d ON d.id=ada.driver_id
       WHERE ada.reservation_id=? AND ada.status NOT IN ('DECLINED','CANCELLED')
+        AND EXISTS (SELECT 1 FROM app_mobile_assignment_ids role_map WHERE role_map.id=ada.id AND role_map.current_slot=1)
       ORDER BY ada.scheduled_start_at,ada.id`,
     [reservationId],
   );

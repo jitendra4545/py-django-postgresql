@@ -1,3 +1,6 @@
+import { createNativeChatStream } from './services/native-chat-stream.js';
+import { pool } from './db/pool.js';
+import { verifyExistingSchema } from './services/schema-verifier.js';
 import { syncClientAssignments } from './services/client-assignment-sync.js';
 import http from 'node:http';
 import { setInterval, clearInterval } from 'node:timers';
@@ -9,6 +12,7 @@ import { sweepExpiredPaymentHolds } from './services/payment-holds.js';
 import { checkPushReceipts, processPushJobs } from './services/notification-worker.js';
 import { startApiAuditLogWriter, stopApiAuditLogWriter } from './services/api-audit-log.js';
 
+await verifyExistingSchema(pool);
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: env.corsOrigins, credentials: true },
@@ -18,6 +22,9 @@ const io = new Server(server, {
 });
 registerSocketServer(io);
 startApiAuditLogWriter();
+const pollNativeMessages=createNativeChatStream();
+await pollNativeMessages();
+const nativeChatTimer=setInterval(()=>pollNativeMessages().catch(error=>console.warn('Native message stream unavailable',{code:error.code})),5000);
 
 server.listen(env.PORT, '0.0.0.0', () => {
   console.log(`Drive Luxury API listening on port ${env.PORT}`);
@@ -50,6 +57,7 @@ const receiptTimer = env.EXPO_PUSH_WORKER_ENABLED
   : null;
 
 const shutdown = (signal) => {
+  clearInterval(nativeChatTimer);
   clearInterval(sweepTimer);
   clearInterval(assignmentSyncTimer);
   if (deliveryTimer) clearInterval(deliveryTimer);

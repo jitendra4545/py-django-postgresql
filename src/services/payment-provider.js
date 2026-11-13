@@ -29,10 +29,11 @@ export const createPaymentIntent = async ({
   currency,
   reservationId,
   customerEmail,
+  attemptKey,
 }) => {
   if (env.PAYMENT_PROVIDER === 'mock') {
     return {
-      providerReference: `mock_${paymentId}_${Date.now()}`,
+      providerReference: `mock_${paymentId}_${attemptKey ?? 'initial'}`,
       status: 'REQUIRES_ACTION',
       clientSecret: `mock_secret_${paymentId}`,
       publishableKey: null,
@@ -51,7 +52,7 @@ export const createPaymentIntent = async ({
         reservationId: String(reservationId),
       },
     },
-    { idempotencyKey: `drive-luxury-payment-${paymentId}` },
+    { idempotencyKey: `drive-luxury-payment-${paymentId}${attemptKey ? `-${attemptKey}` : ''}` },
   );
 
   return {
@@ -102,8 +103,8 @@ export const cancelAbandonedPayment = async (provider, providerReference) => {
   ) {
     return false; // Never free inventory after a successful or processing payment.
   }
-  await stripe().paymentIntents.cancel(providerReference);
-  return true;
+  const cancelled=await stripe().paymentIntents.cancel(providerReference);
+  return cancelled.status==='canceled';
 };
 
 export const constructWebhookEvent = (payload, signature) => {

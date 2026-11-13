@@ -1,0 +1,33 @@
+Drive Luxury 2.6.2 verification
+Executed on a disposable MariaDB import of all 204 supplied MySQL table definitions.
+
+npm run build
+PASS syntax: 151 JavaScript files
+PASS original client route/OpenAPI contract
+PASS OpenAPI coverage: 105 operations
+PASS ESLint
+PASS 135 unit tests in 22 files
+
+scripts/test-exact-schema-adapter.mjs: 46 checks passed
+scripts/test-mobile-enhancements.mjs: 32 checks passed
+scripts/test-shared-policy.mjs: 49 checks passed
+scripts/test-rental-catalog.mjs: 13 checks passed
+PASS startup schema verification and HTTP health
+
+Rental checks:
+PASS positive current season/day rates in website price order
+PASS historical, inactive and zero country rates excluded
+PASS reserved-date, maintenance, commissioning and service exclusions
+PASS country-specific rate takes precedence over cheaper global rate
+PASS selected pickup-city vehicle capacity and current price
+PASS existing response keys
+PASS representative car matches checkout preference
+PASS 26-hour grace
+PASS weekly band changes candidates and base amount
+PASS quote/catalog active-rate consistency
+PASS inactive admin price history does not replace live fare
+PASS no added triggers
+PASS unchanged table/column definitions
+
+Production website result IDs and the user's actual search request were not supplied.
+No production database, deployed backend or mobile application was modified.

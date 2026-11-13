@@ -1,3 +1,5 @@
+import { ensureNativeAssignmentIdentity } from '../services/native-assignment-identity.js';
+import { NATIVE_DOCUMENTS } from '../services/legacy-read-adapters.js';
 import { syncClientAssignments } from '../services/client-assignment-sync.js';
 import { recordBookingStatusEvent } from '../services/mobile-status-events.js';
 import { addMobileDriverExpense } from '../services/mobile-driver-expenses.js';
@@ -447,7 +449,9 @@ router.post(
       );
       if (!damage) throw notFound('Vehicle damage report not found for this assignment');
     }
-    const result = await query(
+    const result = await transaction(async connection => {
+      await ensureNativeAssignmentIdentity(connection,assignment.id);
+      const [created]=await connection.execute(
       `INSERT INTO reservation_service_incidents
          (assignment_id,reservation_id,reported_by_user_id,type,severity,description,
           latitude,longitude,document_ids,status,reported_at,created_at,updated_at,vehicle_damage_id)
@@ -465,11 +469,12 @@ router.post(
         request.body.vehicleDamageId ?? null,
       ],
     );
+      return created;
+    });
     await notifyBookingAudience(assignment.reservation_id, {
-      type: 'INCIDENT',
-      title: 'Service incident reported',
+      type: 'INCIDENT',title: 'Service incident reported',
       body: 'Operations has been notified about an incident.',
-      data: { reservationId: assignment.reservation_id, incidentId: result.insertId },
+      data: {reservationId:assignment.reservation_id,incidentId:result.insertId},
     });
     response.status(201).json({ id: result.insertId, status: 'OPEN' });
   }),
@@ -495,7 +500,7 @@ router.get(
   '/documents',
   asyncHandler(async (request, response) => {
     const items = await query(
-      `SELECT id,category,original_name AS name,mime_type AS mimeType,expires_at AS expiresAt,created_at AS createdAt FROM app_documents WHERE owner_user_id=? AND deleted_at IS NULL ORDER BY created_at DESC`,
+      `SELECT id,category,original_name AS name,mime_type AS mimeType,expires_at AS expiresAt,created_at AS createdAt FROM ${NATIVE_DOCUMENTS} native_app_documents WHERE owner_user_id=? AND deleted_at IS NULL ORDER BY created_at DESC`,
       [request.auth.userId],
     );
     response.json({ items });

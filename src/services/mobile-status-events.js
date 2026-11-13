@@ -62,7 +62,12 @@ export const recordBookingStatusEvent = async (connection, {
       occurredAt,
     ],
   );
-  if(reservationDetailsId!=null)await connection.execute('UPDATE reservation_details SET trip_status_updated_by=?,trip_status_updated_at=NOW() WHERE id=?',[actorUserId,reservationDetailsId]);
+  if(reservationDetailsId!=null)await connection.execute(`UPDATE reservation_details SET
+    trip_status_id=COALESCE((SELECT id FROM reservation_statuses WHERE type='trip_status' AND status=1
+      AND slug IN (?,?) ORDER BY id LIMIT 1),trip_status_id),
+    trip_status_updated_by=?,trip_status_updated_at=NOW() WHERE id=?`,
+    [status==='COMPLETED'?'completed':status==='NO_SHOW'?'no_show_chargeable':status==='CANCELLED'?'cancelled_chargeable':'confirmed',
+     status==='COMPLETED'?'completed_trip':status==='NO_SHOW'?'no_show_chargeable_trip':status==='CANCELLED'?'cancelled_chargeable_trip':'confirmed_trip',actorUserId,reservationDetailsId]);
   if (assignmentId != null && reservationDetailsId != null) {
     const [assignments] = await connection.execute(
       'SELECT driver_id AS mobile_driver_id FROM app_mobile_assignment_ids WHERE id=?',

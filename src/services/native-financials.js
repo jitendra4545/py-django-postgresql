@@ -5,7 +5,7 @@ const rounded = value => new Decimal(value ?? 0).toDecimalPlaces(0, Decimal.ROUN
 
 export async function syncNativeCommissions(connection, reservationId, actorUserId) {
   const [rows] = await connection.execute(`SELECT d.id,c.base_rate,c.discount,r.agency_id,a.commission
-    FROM reservations r JOIN reservation_details d ON d.reservation_id=r.id AND d.status=1 AND d.deleted_at IS NULL
+    FROM reservations r JOIN reservation_details d ON d.reservation_id=r.id AND d.status=1 AND d.deleted_at IS NULL AND COALESCE(d.is_extra_service,0)=0
     JOIN reservation_costs c ON c.reservation_details_id=d.id AND c.status=1
     JOIN agencies a ON a.id=r.agency_id AND a.deleted_at IS NULL
     WHERE r.id=? AND r.deleted_at IS NULL ORDER BY d.id,c.id FOR UPDATE`,[reservationId]);
@@ -29,7 +29,7 @@ export async function syncNativeCommissions(connection, reservationId, actorUser
 }
 
 export async function assertNativePaymentBalance(connection,payment,{lock=true,allowMismatch=false}={}) {
-  const [parents]=await connection.execute(`SELECT id,currency,payment_status,status FROM reservations WHERE id=? ${lock?'FOR UPDATE':''}`,[payment.reservation_id]);
+  const [parents]=await connection.execute(`SELECT id,currency,payment_status,status,deleted_at FROM reservations WHERE id=? ${lock?'FOR UPDATE':''}`,[payment.reservation_id]);
   const parent=parents[0];
   if(!parent)throw new AppError(409,'PAYMENT_HOLD_NOT_ACTIVE','The reservation is not payable');
   if(Number(parent.status)===3&&!allowMismatch)throw new AppError(409,'PAYMENT_HOLD_NOT_ACTIVE','The reservation is not payable');
@@ -42,7 +42,7 @@ export async function assertNativePaymentBalance(connection,payment,{lock=true,a
   const collected=paid.reduce((s,r)=>s.plus(r.payment_amount??0),new Decimal(0));
   const balance=Decimal.max(0,total.minus(collected)).toDecimalPlaces(2,Decimal.ROUND_HALF_UP);
   const currency=parent.currency==='€'?'EUR':String(parent.currency).trim().toUpperCase();
-  const matches=currency===payment.currency&&balance.equals(payment.amount)&&balance.gt(0)&&Number(parent.status)!==3;
+  const matches=currency===payment.currency&&balance.equals(payment.amount)&&balance.gt(0)&&Number(parent.status)!==3&&!parent.deleted_at;
   if(!matches&&!allowMismatch) {
     throw new AppError(409,'PAYMENT_RECONCILIATION_REQUIRED','Operations changed the amount, currency or payments. Review the outstanding balance before charging.');
   }

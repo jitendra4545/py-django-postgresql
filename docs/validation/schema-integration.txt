@@ -1,0 +1,166 @@
+2026-11-12 17:21:38 0 [Warning] failed to retrieve the MAC address
+2026-11-12 17:21:38 0 [Warning] Could not increase number of max_open_files to more than 16384 (request: 32191)
+Exact supplied dump imported; failures: 0
+PASS read-only contract accepts unmodified supplied schema
+PASS runtime rejects schema mutation
+GET /api/v1/catalog/vehicle-classes?serviceCode=CHAUFFEUR&countryId=266&cityId=630&passengerCount=6&startAt=2027-09-01T10:00:00Z&endAt=2027-09-01T12:00:00Z 200 14.585 ms - -
+PASS catalog returns all eight website candidates including country fallback and missing dimensions
+PASS vehicle class JSON keys unchanged
+PASS pickup-city vehicle preferred before country-wide fallback
+GET /api/v1/catalog/options?serviceCode=CHAUFFEUR&vehicleClassId=267 200 2.698 ms - 110
+PASS class-mapped website add-on survives historical service/status mismatch and remains untaxed
+PASS quote taxes base only and applies website chauffeur option units
+PASS concurrent post-payment balance refresh creates one 30 payment, even after 48 hours
+GET /api/v1/bookings/12757 200 74.402 ms - -
+PASS native completed booking exposes extra costs with unchanged mobile fields and no fake journey leg
+PASS booking response envelope exactly retains original keys
+GET /api/v1/bookings?status=UNPAID 200 53.235 ms - 416
+PASS completed booking with later expense appears in existing UNPAID list
+POST /api/v1/payments/21/retry 200 110.028 ms - 158
+POST /api/v1/payments/21/mock-confirm 200 38.757 ms - 25
+GET /api/v1/bookings/12757 200 36.661 ms - -
+PASS top-up settles native ledger and preserves completed trip
+GET /api/v1/bookings/12758 200 59.579 ms - -
+PASS unpaid base and additional expense merge into one 130 payment
+POST /api/v1/payments/22/retry 200 826.028 ms - 158
+GET /api/v1/bookings/12758 200 32.121 ms - -
+PASS admin increase on an initialized unpaid attempt remains payable
+POST /api/v1/payments/22/retry 200 48.886 ms - 187
+PASS retry cancels previous attempt and creates a fresh idempotent intent for combined 150 balance
+POST /api/v1/payments/webhook 200 42.042 ms - 17
+Duplicate Stripe webhook acknowledged { eventId: 'evt_9626b947-6bad-4274-8293-c2f8bfed707c', paymentId: 22 }
+POST /api/v1/payments/webhook 200 6.046 ms - 34
+PASS duplicate webhook records one native payment
+POST /api/v1/payments/23/retry 200 27.972 ms - 158
+GET /api/v1/bookings/12759 200 26.323 ms - -
+PASS admin full bank payment disables an initialized mobile charge
+POST /api/v1/payments/23/retry 409 149.463 ms - 92
+GET /api/v1/payments/24 200 53.271 ms - 163
+PASS payment polling refreshes admin-added optional cost without counting it twice
+GET /api/v1/bookings/12760 200 37.627 ms - -
+PASS retired admin history cannot inflate active reservation prices
+GET /api/v1/bookings/12760 200 36.341 ms - -
+PASS native parent status and currency override stale mobile-only metadata
+PASS partial native payments are deducted from original plus extras
+PASS unrelated custom-invoice payment does not reduce reservation balance
+PASS internal driver/provider costs never become customer expenses
+PASS legacy paid flag without ledger cannot rebill original fare
+GET /api/v1/bookings/12763 200 35.815 ms - -
+PASS native driver roles and active vehicle class appear without metadata triggers
+GET /api/v1/bookings/12763 200 45.731 ms - -
+PASS admin driver removal cancels stale public role
+GET /api/v1/bookings/12763 200 38.094 ms - -
+PASS native admin trip status maps directly to mobile completion
+GET /api/v1/bookings/12763 200 23.186 ms - -
+PASS clearing native admin trip status clears stale driver progress
+GET /api/v1/bookings/12763 200 29.442 ms - -
+PASS native parent cancellation overrides stale mobile metadata
+POST /api/v1/chauffeur/assignments/6/acknowledge 200 32.535 ms - 32
+PASS new document identity avoids historical native IDs absent from mobile table
+POST /api/v1/chauffeur/assignments/6/expenses 201 17.493 ms - 29
+PASS driver expense with native document satisfies exact existing assignment/document FKs
+POST /api/v1/chauffeur/assignments/6/incidents 201 25.320 ms - 24
+PASS driver incident satisfies existing native assignment FK
+GET /api/v1/notifications 200 8.607 ms - 930
+PASS native notification inbox works with physical app_notifications table left untouched
+POST /api/v1/notifications/37/read 204 6.491 ms - -
+GET /api/v1/notifications/unread-count 200 4.723 ms - 11
+PASS notification read writes native morph record
+POST /api/v1/bookings/vip-requests 201 12.270 ms - 32
+GET /api/v1/bookings/manual-requests/vip 200 3.917 ms - 260
+PASS native contact inquiry read works without replacing app_vip_requests table
+PATCH /api/v1/operations/vip-requests/1681 200 14.508 ms - 32
+GET /api/v1/bookings/manual-requests/vip 200 1.974 ms - 266
+PASS inquiry operations update native contact adapter
+POST /api/v1/communication/bookings/12763/conversation 201 38.014 ms - 48
+POST /api/v1/communication/conversations/2/messages 201 43.049 ms - 174
+GET /api/v1/communication/conversations/2/messages 200 16.155 ms - 218
+PASS native messages readable without database views
+GET /api/v1/chauffeur/documents 200 11.124 ms - 150
+PASS native document projection preserves chauffeur document response
+GET /api/v1/client/dashboard 200 49.965 ms - -
+PASS client dashboard derives native lifecycle without trigger installation
+POST /api/v1/bookings/drafts 201 5.980 ms - 26
+PUT /api/v1/bookings/drafts/34/details 200 21.726 ms - 26
+POST /api/v1/bookings/drafts/34/quote 200 34.360 ms - 955
+PASS existing quote response keeps internal adapter policy private
+POST /api/v1/bookings/drafts/34/checkout 201 68.498 ms - 159
+PASS existing mobile checkout creates native admin-manageable reservation
+PASS checkout updates website reserved-date ledger
+POST /api/v1/payments/27/retry 200 60.859 ms - 158
+POST /api/v1/payments/27/mock-confirm 200 45.116 ms - 25
+GET /api/v1/bookings/12764 200 31.633 ms - -
+PASS mobile checkout payment settles against native ledger
+PASS all exercised API flows leave every existing table and column unchanged
+PASS all original indexes and foreign keys remain unchanged
+PASS integration works without installing any database triggers
+EXACT-SCHEMA ADAPTER INTEGRATION: 46 checks passed
+POST /api/v1/communication/bookings/12765/conversation 201 45.478 ms - 48
+POST /api/v1/communication/conversations/3/messages 201 27.555 ms - 176
+PASS text input works while original message response keys remain unchanged
+GET /api/v1/communication/conversations/3/messages 403 20.622 ms - 103
+GET /api/v1/communication/conversations 200 15.662 ms - 350
+PASS driver added after chat creation automatically discovers existing conversation
+GET /api/v1/communication/conversations/3/messages 200 11.374 ms - 220
+PASS new chauffeur can read native booking messages
+POST /api/v1/communication/bookings/12765/conversation 201 66.142 ms - 48
+POST /api/v1/communication/bookings/12765/conversation 201 80.099 ms - 48
+POST /api/v1/communication/bookings/12765/conversation 201 85.000 ms - 48
+PASS concurrent conversation opens reuse one existing identity
+POST /api/v1/communication/conversations/3/messages 201 22.630 ms - 182
+POST /api/v1/communication/conversations/3/messages 201 23.075 ms - 183
+POST /api/v1/communication/conversations/3/read 204 175.658 ms - -
+PASS read boundary does not consume later message with identical timestamp
+GET /api/v1/communication/conversations/3/messages 403 50.350 ms - 103
+POST /api/v1/communication/conversations/3/messages 403 5.621 ms - 103
+GET /api/v1/communication/conversations 200 12.577 ms - 350
+PASS replacement chauffeur gains access and previous chauffeur loses read/send access
+GET /api/v1/communication/conversations 200 12.043 ms - 350
+PASS reassigned returning chauffeur is restored from left_at membership
+GET /api/v1/communication/conversations 200 11.309 ms - 350
+PASS assigned agency agent joins existing conversation
+GET /api/v1/communication/conversations/3/messages 403 9.417 ms - 103
+PASS revoked agent assignment immediately loses chat access
+PASS socket accepts token alias and both documented join payload forms
+PASS unrelated chauffeur cannot join booking room
+POST /api/v1/communication/conversations/3/messages 201 24.513 ms - 181
+PASS live message reaches current room and cannot leak to reassigned driver socket
+PASS new chauffeur joins room without recreating conversation
+GET /api/v1/bookings/drafts/35/payment-breakdown 200 8.581 ms - -
+PASS draft cost information follows CHAUFFEUR calculation
+PASS chauffeur screenshot amounts reconcile exactly
+GET /api/v1/bookings/drafts/35/payment-breakdown 403 5.397 ms - 82
+GET /api/v1/bookings/drafts/36/payment-breakdown 200 14.795 ms - -
+PASS draft cost information follows CAR_RENTAL calculation
+PASS rental collection remains separate from taxable base
+GET /api/v1/bookings/drafts/36/payment-breakdown 403 2.908 ms - 82
+GET /api/v1/bookings/drafts/37/payment-breakdown 200 2.798 ms - -
+PASS draft cost information follows TRANSFER calculation
+GET /api/v1/bookings/drafts/37/payment-breakdown 403 2.377 ms - 82
+GET /api/v1/catalog/vehicle-classes/275/booking-options?serviceCode=CAR_RENTAL 200 17.112 ms - 604
+PASS class extras and class-based insurance are distinct dynamic choices
+GET /api/v1/bookings/12766/payment-breakdown 200 35.896 ms - -
+PASS recorded booking details include named later expense and actual remaining balance
+DELETE /api/v1/operations/clients/8332 403 2.558 ms - 82
+DELETE /api/v1/auth/account 401 445.875 ms - 110
+DELETE /api/v1/auth/account 422 3.666 ms - 159
+DELETE /api/v1/operations/clients/8332 409 10.339 ms - 131
+PASS active client booking blocks deletion
+DELETE /api/v1/operations/chauffeurs/3755 409 8.064 ms - 136
+PASS active chauffeur must be reassigned before deletion
+DELETE /api/v1/auth/account 200 426.798 ms - 64
+PASS client self deletion marks native user and profile deleted
+GET /api/v1/client/profile 401 1.605 ms - 91
+PASS deletion revokes refresh sessions and push tokens
+PASS outstanding invitation cannot reactivate deleted account
+PASS deletion preserves native booking and receipt history
+DELETE /api/v1/auth/account 200 442.525 ms - 67
+PASS chauffeur can delete own idle account
+DELETE /api/v1/auth/account 200 608.967 ms - 69
+PASS agent can delete own account without deleting shared agency
+PASS account deletion disconnects live authenticated socket
+DELETE /api/v1/operations/chauffeurs/3754 200 19.880 ms - 67
+PASS administrator can delete an idle chauffeur by profile ID
+PASS all enhancements leave every existing table and column unchanged
+MOBILE ENHANCEMENTS INTEGRATION: 31 checks passed
+PASS startup schema verification and HTTP health

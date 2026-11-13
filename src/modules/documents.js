@@ -1,3 +1,4 @@
+import { NATIVE_DOCUMENTS } from '../services/legacy-read-adapters.js';
 import { insertNativeDocument } from '../services/client-native-store.js';
 import fs from 'node:fs';
 import { Router } from 'express';
@@ -7,7 +8,7 @@ import { requireAuth } from '../common/auth.js';
 import { AppError, forbidden, notFound } from '../common/errors.js';
 import { env } from '../config/env.js';
 import { ROLES } from '../config/constants.js';
-import { one, query, transaction } from '../db/pool.js';
+import { one, transaction } from '../db/pool.js';
 import { getReservationForAccess } from '../services/access.js';
 import { localFilePath, signedDownloadUrl, storePrivateFile } from '../services/storage.js';
 
@@ -78,7 +79,7 @@ const assertDocumentAccess = async (request, document) => {
 router.get(
   '/:id/download',
   asyncHandler(async (request, response) => {
-    const document = await one('SELECT * FROM app_documents WHERE id=? AND deleted_at IS NULL', [
+    const document = await one(`SELECT * FROM ${NATIVE_DOCUMENTS} native_app_documents WHERE id=? AND deleted_at IS NULL`, [
       request.params.id,
     ]);
     if (!document) throw notFound('Document not found');

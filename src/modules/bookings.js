@@ -1,3 +1,5 @@
+import { nativeServiceCodeSql, nativeCurrencySql, nativeLifecycleSql } from '../services/legacy-reservation-adapter.js';
+import { NATIVE_CONCIERGE_REQUESTS, NATIVE_VIP_REQUESTS } from '../services/legacy-read-adapters.js';
 import { insertNativeInquiry } from '../services/client-native-store.js';
 import { recordBookingStatusEvent } from '../services/mobile-status-events.js';
 import { PAYMENT_OPTIONS, paymentAction, updatedProviderPayload } from '../services/booking-payment-policy.js';
@@ -400,9 +402,9 @@ router.get(
     const where = clauses.join(' AND ');
     const items = await query(
       `SELECT r.id, r.reservation_no AS reservationNo, r.customer_id AS customerId,
-            arm.service_code AS serviceCode, arm.lifecycle_status AS status,
+            ${nativeServiceCodeSql()} AS serviceCode, ${nativeLifecycleSql()} AS status,
             dates.firstServiceDate, dates.lastServiceDate,
-            costs.totalAmount, arm.currency_code AS currency,
+            costs.totalAmount, ${nativeCurrencySql()} AS currency,
             r.status AS legacyStatus,
             p.id AS lastPaymentId, p.status AS lastPaymentStatus,
             p.provider_reference AS lastProviderReference,
@@ -419,11 +421,11 @@ router.get(
        LEFT JOIN (
          SELECT reservation_id, MIN(pick_up_date) AS firstServiceDate,
                 MAX(drop_off_date) AS lastServiceDate
-           FROM reservation_details WHERE deleted_at IS NULL GROUP BY reservation_id
+           FROM reservation_details WHERE status=1 AND deleted_at IS NULL AND COALESCE(is_extra_service,0)=0 GROUP BY reservation_id
        ) dates ON dates.reservation_id = r.id
        LEFT JOIN (
          SELECT reservation_id, SUM(total_amount) AS totalAmount
-           FROM reservation_costs WHERE status = 1 GROUP BY reservation_id
+           FROM reservation_costs c WHERE c.status=1 AND EXISTS (SELECT 1 FROM reservation_details d WHERE d.id=c.reservation_details_id AND d.status=1 AND d.deleted_at IS NULL) GROUP BY reservation_id
        ) costs ON costs.reservation_id = r.id
       WHERE ${where}
       ORDER BY r.created_at DESC LIMIT ? OFFSET ?`,
@@ -603,7 +605,7 @@ router.get(
       `SELECT id,customer_id AS customerId,airport,terminal,service_at AS serviceAt,
               passenger_count AS passengerCount,flight_number AS flightNumber,request_text AS requestText,
               status,operations_note AS operationsNote,created_at AS createdAt
-         FROM app_vip_requests WHERE ${clause} ORDER BY created_at DESC LIMIT 200`,
+         FROM ${NATIVE_VIP_REQUESTS} native_app_vip_requests WHERE ${clause} ORDER BY created_at DESC LIMIT 200`,
       params,
     );
     response.json({ items });
@@ -648,7 +650,7 @@ router.get(
     const items = await query(
       `SELECT id,customer_id AS customerId,category,requested_for AS requestedFor,city,
               request_text AS requestText,status,operations_note AS operationsNote,created_at AS createdAt
-         FROM app_concierge_requests WHERE ${clause} ORDER BY created_at DESC LIMIT 200`,
+         FROM ${NATIVE_CONCIERGE_REQUESTS} native_app_concierge_requests WHERE ${clause} ORDER BY created_at DESC LIMIT 200`,
       params,
     );
     response.json({ items });

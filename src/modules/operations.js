@@ -1,3 +1,6 @@
+import {assertVehicleCapacity} from '../services/vehicle-capacity.js';
+import { nativeServiceCodeSql, nativeCurrencySql, nativeLifecycleSql } from '../services/legacy-reservation-adapter.js';
+import { NATIVE_CONCIERGE_REQUESTS, NATIVE_VIP_REQUESTS } from '../services/legacy-read-adapters.js';
 import { reconcileNativeRows } from '../services/client-assignment-sync.js';
 import { recordBookingStatusEvent } from '../services/mobile-status-events.js';
 import { Router } from 'express';
@@ -19,10 +22,10 @@ import {
   notifyBookingAudienceBestEffort as notifyBookingAudience,
   notifyUserBestEffort as notifyUser,
 } from '../services/notifications.js';
-import { createPaymentIntent, createRefund } from '../services/payment-provider.js';
+import { createRefund } from '../services/payment-provider.js';
 import { hashPassword } from '../services/passwords.js';
 import { randomToken, tokenHash } from '../services/tokens.js';
-import { listAvailableVehicles } from '../services/vehicle-availability.js';
+import { listAvailableVehicles } from '../services/operational-vehicle-availability.js';
 import { emailDeliveryEnabled, sendInvitationEmail } from '../services/email.js';
 import {bufferedDriverWindow,nativeDriverWindow} from '../services/native-driver-windows.js';
 import operationsWorkspace from './operations-workspace.js';
@@ -232,8 +235,6 @@ router.get(
     'query',
   ),
   asyncHandler(async (request, response) => {
-    const start = request.query.startAt.slice(0, 19).replace('T', ' ');
-    const end = request.query.endAt.slice(0, 19).replace('T', ' ');
     await syncClientAssignments({});
     const buffer=bufferedDriverWindow(request.query.startAt,request.query.endAt);
     const filters = [];
@@ -302,8 +303,8 @@ router.get(
   asyncHandler(async (_request, response) => {
     const items = await query(
       `SELECT r.id,r.reservation_no AS reservationNo,c.full_name AS clientName,
-              arm.service_code AS serviceCode,arm.lifecycle_status AS status,
-              costs.totalAmount,arm.currency_code AS currency
+              ${nativeServiceCodeSql()} AS serviceCode,${nativeLifecycleSql()} AS status,
+              costs.totalAmount,${nativeCurrencySql()} AS currency
          FROM reservations r
          JOIN reservations arm ON arm.id=r.id
          JOIN customers c ON c.id=r.customer_id
@@ -391,7 +392,7 @@ router.post(
     await syncClientAssignments({});
     const result = await transaction(async (connection) => {
       const [details] = await connection.execute(
-        `SELECT rd.*,arm.service_type FROM reservation_details rd JOIN reservations arm ON arm.id=rd.reservation_id WHERE rd.id=? AND rd.reservation_id=? AND rd.status=1 AND rd.deleted_at IS NULL AND COALESCE(rd.is_extra_service,0)=0 AND arm.status=1 AND arm.lifecycle_status NOT IN ('COMPLETED','CANCELLED','PAYMENT_PENDING','PAYMENT_FAILED') FOR UPDATE`,
+        `SELECT rd.*,arm.service_type FROM reservation_details rd JOIN reservations arm ON arm.id=rd.reservation_id WHERE rd.id=? AND rd.reservation_id=? AND rd.status=1 AND rd.deleted_at IS NULL AND COALESCE(rd.is_extra_service,0)=0 AND arm.status=1 AND ${nativeLifecycleSql('arm')} NOT IN ('COMPLETED','CANCELLED','PAYMENT_PENDING','PAYMENT_FAILED') FOR UPDATE`,
         [request.params.detailId, request.params.reservationId],
       );
       if (!details[0]) throw notFound('Confirmed booking leg not found');
@@ -513,7 +514,7 @@ router.get(
   ),
   asyncHandler(async (request, response) => {
     let leg=null;
-    if(request.query.detailId){leg=await one('SELECT d.*,r.service_code FROM reservation_details d JOIN reservations r ON r.id=d.reservation_id WHERE d.id=? AND d.status=1 AND d.deleted_at IS NULL AND COALESCE(d.is_extra_service,0)=0',[request.query.detailId]);if(!leg)throw notFound('Active booking leg not found');}
+    if(request.query.detailId){leg=await one(`SELECT d.*,${nativeServiceCodeSql()} AS service_code FROM reservation_details d JOIN reservations r ON r.id=d.reservation_id WHERE d.id=? AND d.status=1 AND d.deleted_at IS NULL AND COALESCE(d.is_extra_service,0)=0`,[request.query.detailId]);if(!leg)throw notFound('Active booking leg not found');}
     const items = await listAvailableVehicles({...request.query,
       ...(leg?{excludeReservationDetailId:leg.id,passengerCount:leg.passenger_count??1,luggageCount:leg.luggage_count??0,serviceCode:leg.service_code}:{}),
     });
@@ -527,7 +528,7 @@ router.post(
   asyncHandler(async (request, response) => {
     const assignment = await transaction(async (connection) => {
       const [details] = await connection.execute(
-        `SELECT rd.*,r.service_code FROM reservation_details rd JOIN reservations r ON r.id=rd.reservation_id
+        `SELECT rd.*,${nativeServiceCodeSql()} AS service_code FROM reservation_details rd JOIN reservations r ON r.id=rd.reservation_id
           WHERE rd.id=? AND rd.reservation_id=? AND rd.status=1 AND rd.deleted_at IS NULL AND COALESCE(rd.is_extra_service,0)=0
           AND r.status=1 AND r.deleted_at IS NULL FOR UPDATE`,
         [request.params.detailId, request.params.reservationId],
@@ -546,6 +547,7 @@ router.post(
         ],
       );
       if (!vehicles[0]) throw notFound('Available vehicle in the selected class not found');
+      await assertVehicleCapacity(connection,request.body.vehicleId,detail.passenger_count??1,detail.luggage_count??0);
       const day=value=>value instanceof Date?value.toISOString().slice(0,10):String(value).slice(0,10);
       const startAt=`${day(detail.pick_up_date)}T${detail.pick_up_time??'00:00:00'}Z`;
       const endAt=`${day(detail.drop_off_date??detail.pick_up_date)}T${detail.drop_off_time??'23:59:59'}Z`;
@@ -997,13 +999,13 @@ router.patch(
   ),
   asyncHandler(async (request, response) => {
     const result = await query(
-      `UPDATE app_vip_requests SET status=?,operations_note=?,updated_at=NOW() WHERE id=?`,
+      `UPDATE contacts SET mobile_request_status=?,mobile_operations_note=?,updated_at=NOW() WHERE COALESCE(mobile_request_id,id)=? AND mobile_request_kind='VIP'`,
       [request.body.status, request.body.operationsNote ?? null, request.params.requestId],
     );
     if (!result.affectedRows) throw notFound('VIP request not found');
     const vip = await one(
       `SELECT r.created_by_user_id AS creatorId,c.user_id AS customerUserId
-         FROM app_vip_requests r JOIN customers c ON c.id=r.customer_id WHERE r.id=?`,
+         FROM ${NATIVE_VIP_REQUESTS} r JOIN customers c ON c.id=r.customer_id WHERE r.id=?`,
       [request.params.requestId],
     );
     if (vip) {
@@ -1035,13 +1037,13 @@ router.patch(
   ),
   asyncHandler(async (request, response) => {
     const result = await query(
-      `UPDATE app_concierge_requests SET status=?,operations_note=?,updated_at=NOW() WHERE id=?`,
+      `UPDATE contacts SET mobile_request_status=?,mobile_operations_note=?,updated_at=NOW() WHERE COALESCE(mobile_request_id,id)=? AND mobile_request_kind='CONCIERGE'`,
       [request.body.status, request.body.operationsNote ?? null, request.params.requestId],
     );
     if (!result.affectedRows) throw notFound('Concierge request not found');
     const concierge = await one(
       `SELECT r.created_by_user_id AS creatorId,c.user_id AS customerUserId
-         FROM app_concierge_requests r JOIN customers c ON c.id=r.customer_id WHERE r.id=?`,
+         FROM ${NATIVE_CONCIERGE_REQUESTS} r JOIN customers c ON c.id=r.customer_id WHERE r.id=?`,
       [request.params.requestId],
     );
     if (concierge) {

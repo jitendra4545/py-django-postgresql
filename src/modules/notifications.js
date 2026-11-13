@@ -1,3 +1,5 @@
+import { env } from '../config/env.js';
+import { NATIVE_NOTIFICATIONS } from '../services/legacy-read-adapters.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../common/async-handler.js';
@@ -85,7 +87,7 @@ router.get(
   '/unread-count',
   asyncHandler(async (request, response) => {
     const unread = await one(
-      'SELECT COUNT(*) AS total FROM app_notifications WHERE user_id=? AND read_at IS NULL',
+      `SELECT COUNT(*) AS total FROM ${NATIVE_NOTIFICATIONS} native_app_notifications WHERE user_id=? AND read_at IS NULL`,
       [request.auth.userId],
     );
     response.json({ count: Number(unread.total) });
@@ -108,12 +110,12 @@ router.get(
     const suffix = unreadOnly ? ' AND read_at IS NULL' : '';
     const items = await query(
       `SELECT id,type,title,body,data,read_at AS readAt,created_at AS createdAt
-         FROM app_notifications WHERE user_id=?${suffix}
+         FROM ${NATIVE_NOTIFICATIONS} native_app_notifications WHERE user_id=?${suffix}
         ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?`,
       [request.auth.userId, perPage, offset],
     );
     const total = await one(
-      `SELECT COUNT(*) AS total FROM app_notifications WHERE user_id=?${suffix}`,
+      `SELECT COUNT(*) AS total FROM ${NATIVE_NOTIFICATIONS} native_app_notifications WHERE user_id=?${suffix}`,
       [request.auth.userId],
     );
     response.json(pageResponse(items, Number(total.total), page, perPage));
@@ -125,8 +127,8 @@ router.post(
   validate(z.object({ id: z.coerce.number().int().positive() }), 'params'),
   asyncHandler(async (request, response) => {
     await query(
-      'UPDATE app_notifications SET read_at=COALESCE(read_at,NOW()) WHERE id=? AND user_id=?',
-      [request.params.id, request.auth.userId],
+      'UPDATE notifications SET read_at=COALESCE(read_at,NOW()) WHERE mobile_notification_id=? AND notifiable_id=? AND notifiable_type=?',
+      [request.params.id, request.auth.userId, env.LEGACY_USER_MODEL],
     );
     response.status(204).end();
   }),
@@ -135,8 +137,8 @@ router.post(
 router.post(
   '/read-all',
   asyncHandler(async (request, response) => {
-    await query('UPDATE app_notifications SET read_at=COALESCE(read_at,NOW()) WHERE user_id=?', [
-      request.auth.userId,
+    await query('UPDATE notifications SET read_at=COALESCE(read_at,NOW()) WHERE notifiable_id=? AND notifiable_type=?', [
+      request.auth.userId, env.LEGACY_USER_MODEL,
     ]);
     response.status(204).end();
   }),

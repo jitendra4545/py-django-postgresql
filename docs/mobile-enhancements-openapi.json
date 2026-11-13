@@ -1,0 +1,1127 @@
+{
+  "paths": {
+    "/auth/account": {
+      "delete": {
+        "summary": "Delete own client, chauffeur or agent account (soft deletion with reauthentication)",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "userId",
+                    "profileId",
+                    "role",
+                    "deleted"
+                  ],
+                  "properties": {
+                    "userId": {
+                      "type": "integer"
+                    },
+                    "profileId": {
+                      "type": "integer"
+                    },
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "CLIENT",
+                        "CHAUFFEUR",
+                        "AGENCY_AGENT"
+                      ]
+                    },
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "409": {
+            "description": "Active booking, assignment, payment or quote conflict"
+          },
+          "422": {
+            "description": "Invalid request"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "confirm"
+                ],
+                "properties": {
+                  "confirm": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ]
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 1000
+                  },
+                  "password": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "idToken": {
+                    "type": "string",
+                    "minLength": 20
+                  }
+                },
+                "oneOf": [
+                  {
+                    "required": [
+                      "password"
+                    ],
+                    "not": {
+                      "required": [
+                        "idToken"
+                      ]
+                    }
+                  },
+                  {
+                    "required": [
+                      "idToken"
+                    ],
+                    "not": {
+                      "required": [
+                        "password"
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/operations/clients/{profileId}": {
+      "delete": {
+        "summary": "Administrator deletes client profile and linked user",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "userId",
+                    "profileId",
+                    "role",
+                    "deleted"
+                  ],
+                  "properties": {
+                    "userId": {
+                      "type": "integer"
+                    },
+                    "profileId": {
+                      "type": "integer"
+                    },
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "CLIENT",
+                        "CHAUFFEUR",
+                        "AGENCY_AGENT"
+                      ]
+                    },
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "409": {
+            "description": "Active booking, assignment, payment or quote conflict"
+          },
+          "422": {
+            "description": "Invalid request"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "profileId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "confirm"
+                ],
+                "properties": {
+                  "confirm": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ]
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/operations/chauffeurs/{profileId}": {
+      "delete": {
+        "summary": "Administrator deletes chauffeur profile and linked user",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "userId",
+                    "profileId",
+                    "role",
+                    "deleted"
+                  ],
+                  "properties": {
+                    "userId": {
+                      "type": "integer"
+                    },
+                    "profileId": {
+                      "type": "integer"
+                    },
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "CLIENT",
+                        "CHAUFFEUR",
+                        "AGENCY_AGENT"
+                      ]
+                    },
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "409": {
+            "description": "Active booking, assignment, payment or quote conflict"
+          },
+          "422": {
+            "description": "Invalid request"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "profileId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "confirm"
+                ],
+                "properties": {
+                  "confirm": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ]
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/operations/agents/{profileId}": {
+      "delete": {
+        "summary": "Administrator deletes agent profile and linked user",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "userId",
+                    "profileId",
+                    "role",
+                    "deleted"
+                  ],
+                  "properties": {
+                    "userId": {
+                      "type": "integer"
+                    },
+                    "profileId": {
+                      "type": "integer"
+                    },
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "CLIENT",
+                        "CHAUFFEUR",
+                        "AGENCY_AGENT"
+                      ]
+                    },
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "409": {
+            "description": "Active booking, assignment, payment or quote conflict"
+          },
+          "422": {
+            "description": "Invalid request"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "profileId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "confirm"
+                ],
+                "properties": {
+                  "confirm": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ]
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/catalog/vehicle-classes/{vehicleClassId}/booking-options": {
+      "get": {
+        "summary": "Class-mapped rental extras and separate insurance choices",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "vehicleClassId",
+                    "serviceCode",
+                    "options",
+                    "insuranceChoices",
+                    "defaultInsuranceType"
+                  ],
+                  "properties": {
+                    "vehicleClassId": {
+                      "type": "integer"
+                    },
+                    "serviceCode": {
+                      "type": "string"
+                    },
+                    "options": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "insuranceChoices": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "unitAmount": {
+                            "type": "number"
+                          },
+                          "billingUnit": {
+                            "type": "string"
+                          },
+                          "included": {
+                            "type": "boolean"
+                          },
+                          "description": {
+                            "type": "string",
+                            "nullable": true
+                          }
+                        }
+                      }
+                    },
+                    "defaultInsuranceType": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "409": {
+            "description": "Active booking, assignment, payment or quote conflict"
+          },
+          "422": {
+            "description": "Invalid request"
+          }
+        },
+        "parameters": [
+          {
+            "name": "vehicleClassId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "serviceCode",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "CHAUFFEUR",
+                "CAR_RENTAL",
+                "TRANSFER"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/drafts/{draftId}/payment-breakdown": {
+      "get": {
+        "summary": "Display hourly, daily or transfer cost information from the current quote",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "scope",
+                    "serviceCode",
+                    "currency",
+                    "sections",
+                    "summary",
+                    "payment"
+                  ],
+                  "properties": {
+                    "scope": {
+                      "type": "string",
+                      "enum": [
+                        "DRAFT",
+                        "RESERVATION"
+                      ]
+                    },
+                    "reservationId": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "quoteId": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "serviceCode": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "validUntil": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "quoteIsValid": {
+                      "type": "boolean",
+                      "nullable": true
+                    },
+                    "sections": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "title",
+                          "currency",
+                          "rate",
+                          "rows",
+                          "options",
+                          "tax",
+                          "totals"
+                        ],
+                        "properties": {
+                          "title": {
+                            "type": "string"
+                          },
+                          "serviceCode": {
+                            "type": "string"
+                          },
+                          "currency": {
+                            "type": "string"
+                          },
+                          "isExtraService": {
+                            "type": "boolean"
+                          },
+                          "rate": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "type": "string"
+                              },
+                              "unit": {
+                                "type": "string",
+                                "enum": [
+                                  "HOUR",
+                                  "DAY",
+                                  "TRIP",
+                                  "CHARGE"
+                                ]
+                              },
+                              "quantity": {
+                                "type": "number"
+                              },
+                              "quantityLabel": {
+                                "type": "string"
+                              },
+                              "unitAmount": {
+                                "type": "number"
+                              },
+                              "baseAmount": {
+                                "type": "number"
+                              },
+                              "calculation": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "rows": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "key",
+                                "label",
+                                "amount"
+                              ],
+                              "properties": {
+                                "key": {
+                                  "type": "string"
+                                },
+                                "label": {
+                                  "type": "string"
+                                },
+                                "amount": {
+                                  "type": "number"
+                                }
+                              }
+                            }
+                          },
+                          "options": {
+                            "type": "array",
+                            "items": {
+                              "type": "object"
+                            }
+                          },
+                          "tax": {
+                            "type": "object",
+                            "properties": {
+                              "ratePercent": {
+                                "type": "number",
+                                "nullable": true
+                              },
+                              "taxableBase": {
+                                "type": "number",
+                                "nullable": true
+                              },
+                              "amount": {
+                                "type": "number"
+                              },
+                              "basis": {
+                                "type": "string",
+                                "enum": [
+                                  "BASE_FEE_ONLY",
+                                  "RECORDED"
+                                ]
+                              },
+                              "note": {
+                                "type": "string",
+                                "nullable": true
+                              }
+                            }
+                          },
+                          "totals": {
+                            "type": "object",
+                            "properties": {
+                              "baseFee": {
+                                "type": "number"
+                              },
+                              "options": {
+                                "type": "number"
+                              },
+                              "oneWayCharge": {
+                                "type": "number"
+                              },
+                              "chauffeurExtraCost": {
+                                "type": "number"
+                              },
+                              "insuranceCost": {
+                                "type": "number"
+                              },
+                              "discount": {
+                                "type": "number"
+                              },
+                              "netCost": {
+                                "type": "number"
+                              },
+                              "tax": {
+                                "type": "number"
+                              },
+                              "roundingAdjustment": {
+                                "type": "number"
+                              },
+                              "priceAdjustment": {
+                                "type": "number"
+                              },
+                              "total": {
+                                "type": "number"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "summary": {
+                      "type": "object",
+                      "required": [
+                        "total",
+                        "paid",
+                        "amountDue"
+                      ],
+                      "properties": {
+                        "total": {
+                          "type": "number"
+                        },
+                        "paid": {
+                          "type": "number"
+                        },
+                        "amountDue": {
+                          "type": "number"
+                        }
+                      }
+                    },
+                    "payment": {
+                      "type": "object",
+                      "properties": {
+                        "paymentId": {
+                          "type": "integer",
+                          "nullable": true
+                        },
+                        "paymentState": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "canPay": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "409": {
+            "description": "Active booking, assignment, payment or quote conflict"
+          },
+          "422": {
+            "description": "Invalid request"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "draftId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ]
+      }
+    },
+    "/bookings/{reservationId}/payment-breakdown": {
+      "get": {
+        "summary": "Display current native costs, later expenses, payments and balance",
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "scope",
+                    "serviceCode",
+                    "currency",
+                    "sections",
+                    "summary",
+                    "payment"
+                  ],
+                  "properties": {
+                    "scope": {
+                      "type": "string",
+                      "enum": [
+                        "DRAFT",
+                        "RESERVATION"
+                      ]
+                    },
+                    "reservationId": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "quoteId": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "serviceCode": {
+                      "type": "string"
+                    },
+                    "currency": {
+                      "type": "string"
+                    },
+                    "validUntil": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "quoteIsValid": {
+                      "type": "boolean",
+                      "nullable": true
+                    },
+                    "sections": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "title",
+                          "currency",
+                          "rate",
+                          "rows",
+                          "options",
+                          "tax",
+                          "totals"
+                        ],
+                        "properties": {
+                          "title": {
+                            "type": "string"
+                          },
+                          "serviceCode": {
+                            "type": "string"
+                          },
+                          "currency": {
+                            "type": "string"
+                          },
+                          "isExtraService": {
+                            "type": "boolean"
+                          },
+                          "rate": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "type": "string"
+                              },
+                              "unit": {
+                                "type": "string",
+                                "enum": [
+                                  "HOUR",
+                                  "DAY",
+                                  "TRIP",
+                                  "CHARGE"
+                                ]
+                              },
+                              "quantity": {
+                                "type": "number"
+                              },
+                              "quantityLabel": {
+                                "type": "string"
+                              },
+                              "unitAmount": {
+                                "type": "number"
+                              },
+                              "baseAmount": {
+                                "type": "number"
+                              },
+                              "calculation": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "rows": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "required": [
+                                "key",
+                                "label",
+                                "amount"
+                              ],
+                              "properties": {
+                                "key": {
+                                  "type": "string"
+                                },
+                                "label": {
+                                  "type": "string"
+                                },
+                                "amount": {
+                                  "type": "number"
+                                }
+                              }
+                            }
+                          },
+                          "options": {
+                            "type": "array",
+                            "items": {
+                              "type": "object"
+                            }
+                          },
+                          "tax": {
+                            "type": "object",
+                            "properties": {
+                              "ratePercent": {
+                                "type": "number",
+                                "nullable": true
+                              },
+                              "taxableBase": {
+                                "type": "number",
+                                "nullable": true
+                              },
+                              "amount": {
+                                "type": "number"
+                              },
+                              "basis": {
+                                "type": "string",
+                                "enum": [
+                                  "BASE_FEE_ONLY",
+                                  "RECORDED"
+                                ]
+                              },
+                              "note": {
+                                "type": "string",
+                                "nullable": true
+                              }
+                            }
+                          },
+                          "totals": {
+                            "type": "object",
+                            "properties": {
+                              "baseFee": {
+                                "type": "number"
+                              },
+                              "options": {
+                                "type": "number"
+                              },
+                              "oneWayCharge": {
+                                "type": "number"
+                              },
+                              "chauffeurExtraCost": {
+                                "type": "number"
+                              },
+                              "insuranceCost": {
+                                "type": "number"
+                              },
+                              "discount": {
+                                "type": "number"
+                              },
+                              "netCost": {
+                                "type": "number"
+                              },
+                              "tax": {
+                                "type": "number"
+                              },
+                              "roundingAdjustment": {
+                                "type": "number"
+                              },
+                              "priceAdjustment": {
+                                "type": "number"
+                              },
+                              "total": {
+                                "type": "number"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "summary": {
+                      "type": "object",
+                      "required": [
+                        "total",
+                        "paid",
+                        "amountDue"
+                      ],
+                      "properties": {
+                        "total": {
+                          "type": "number"
+                        },
+                        "paid": {
+                          "type": "number"
+                        },
+                        "amountDue": {
+                          "type": "number"
+                        }
+                      }
+                    },
+                    "payment": {
+                      "type": "object",
+                      "properties": {
+                        "paymentId": {
+                          "type": "integer",
+                          "nullable": true
+                        },
+                        "paymentState": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "canPay": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Access denied"
+          },
+          "409": {
+            "description": "Active booking, assignment, payment or quote conflict"
+          },
+          "422": {
+            "description": "Invalid request"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "reservationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ]
+      }
+    },
+    "/operations/bookings/{reservationId}/customer-charges": {
+      "post": {
+        "summary": "Admin explicitly bills an additional native reservation fee, optionally linked to an approved driver expense",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "reservationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "title",
+                  "amount"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "maxLength": 191
+                  },
+                  "amount": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "expenseId": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created zero-tax fee; balance is exposed by existing booking and payment-breakdown reads"
+          },
+          "200": {
+            "description": "Same durable idempotency reference reused"
+          },
+          "403": {
+            "description": "Admin role required"
+          },
+          "409": {
+            "description": "Cancelled booking, rejected/unreviewed expense, previously billed expense, or key conflict"
+          }
+        }
+      }
+    }
+  }
+}

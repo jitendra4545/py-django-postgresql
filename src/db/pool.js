@@ -1,3 +1,4 @@
+import { guardExecutor } from './schema-guard.js';
 import fs from 'node:fs';
 import mysql from 'mysql2/promise';
 import { env } from '../config/env.js';
@@ -13,7 +14,7 @@ const ssl = env.DB_SSL
     }
   : undefined;
 
-export const pool = mysql.createPool({
+export const pool = guardExecutor(mysql.createPool({
   host: env.DB_HOST,
   port: env.DB_PORT,
   user: env.DB_USER,
@@ -24,7 +25,7 @@ export const pool = mysql.createPool({
   decimalNumbers: true,
   timezone: 'Z',
   ssl,
-});
+}));
 
 export const query = async (sql, params = []) => {
   const [rows] = await pool.execute(sql, params);
@@ -37,7 +38,7 @@ export const one = async (sql, params = []) => {
 };
 
 export const transaction = async (work) => {
-  const connection = await pool.getConnection();
+  const connection = guardExecutor(await pool.getConnection());
   try {
     await connection.beginTransaction();
     const result = await work(connection);

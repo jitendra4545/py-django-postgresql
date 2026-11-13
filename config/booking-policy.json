@@ -1,0 +1,26 @@
+{
+  "version": "2026-11-12.1",
+  "taxPolicy": "BASE_FEE_ONLY",
+  "taxFormula": "max(0, baseRate - discount) * rate / 100; fee-only extra services: zero tax",
+  "taxRounding": {
+    "CHF": 0.05,
+    "other": 0.01
+  },
+  "totalRounding": 1,
+  "availabilityPolicy": "COUNTRY_FLEET_AND_NATIVE_OCCUPANCY",
+  "availabilityBaseSql": "{a}.status=1 AND {a}.online_booking_status=1 AND {a}.deleted_at IS NULL\nAND EXISTS (SELECT 1 FROM vehicle_service_types vst WHERE vst.vehicle_id={a}.id AND vst.service_type=?)\nAND EXISTS (SELECT 1 FROM vehicle_cities coverage WHERE coverage.vehicle_id={a}.id AND coverage.deleted_at IS NULL AND UPPER(TRIM(coverage.country))=(SELECT UPPER(code) FROM countries WHERE id=? AND status=1 AND deleted_at IS NULL))",
+  "availabilityDatesSql": "AND ({a}.doa_fleet IS NULL OR {a}.doa_fleet<=DATE(?))\nAND NOT EXISTS (SELECT 1 FROM vehicle_blocks vb WHERE vb.vehicle_id={a}.id\n AND TIMESTAMP(vb.start_date,COALESCE(vb.start_time,'00:00:00')) < ?\n AND TIMESTAMP(vb.end_date,COALESCE(vb.end_time,'23:59:59')) > ?)\nAND NOT EXISTS (SELECT 1 FROM vehicle_reserved_dates busy WHERE busy.vehicle_id={a}.id AND busy.reserved_date BETWEEN DATE(?) AND DATE(?)\n AND COALESCE(busy.reservation_detail_id,0)<>?\n AND NOT EXISTS (SELECT 1 FROM reservations retired_parent WHERE retired_parent.id=busy.reservation_id AND (retired_parent.status=3 OR retired_parent.deleted_at IS NOT NULL))\n AND NOT EXISTS (SELECT 1 FROM reservation_details retired_leg WHERE retired_leg.id=busy.reservation_detail_id AND (retired_leg.status<>1 OR retired_leg.deleted_at IS NOT NULL)))\nAND NOT EXISTS (SELECT 1 FROM reservation_vehicles rv WHERE rv.vehicle_id={a}.id AND rv.status=1 AND rv.deleted_at IS NULL AND rv.reservation_details_id<>?\n AND EXISTS (SELECT 1 FROM reservations live_parent WHERE live_parent.id=rv.reservation_id AND live_parent.status<>3 AND live_parent.deleted_at IS NULL)\n AND EXISTS (SELECT 1 FROM reservation_details live_leg WHERE live_leg.id=rv.reservation_details_id AND live_leg.status=1 AND live_leg.deleted_at IS NULL)\n AND TIMESTAMP(rv.pick_up_date,COALESCE(rv.pick_up_time,'00:00:00')) < ?\n AND TIMESTAMP(COALESCE(rv.drop_off_date,rv.pick_up_date),COALESCE(rv.drop_off_time,'23:59:59')) > ?)",
+  "dateParameterOrder": [
+    "start",
+    "end",
+    "start",
+    "start",
+    "end",
+    "excludeDetailId",
+    "excludeDetailId",
+    "end",
+    "start"
+  ],
+  "cityPolicy": "Preference by original locality, then oldest vehicle ID; country-wide fallback",
+  "capacityPolicy": "Availability is physical eligibility. Capacity is validated separately when assigning a vehicle; missing dimension metadata does not hide classes."
+}

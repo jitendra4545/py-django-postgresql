@@ -1,167 +1,91 @@
-Current web workspace release: read docs/WEB_WORKSPACE_ADMIN_INTEGRATION.md. Existing mobile contracts are preserved; the staff workspace adds one read endpoint.
+# Drive Luxury 2.6.2
 
-# Client database compatibility release
+Current shared policies, native table mapping, additional expenses and remaining integration: [docs/LEGACY_ADAPTER_REPORT.md](docs/LEGACY_ADAPTER_REPORT.md). Workbench test-agent setup: [docs/AGENT_TESTING_WORKBENCH.md](docs/AGENT_TESTING_WORKBENCH.md). Validation: [docs/VALIDATION.md](docs/VALIDATION.md). The combined bundle also includes changed Laravel source; apply its change list to the existing complete website.
 
-Start with [LOCAL_CLIENT_DB_SETUP.md](LOCAL_CLIENT_DB_SETUP.md). The new `npm run db:client:upgrade` command upgrades an imported local client database; `npm run db:client:verify` checks it. Runtime API routes and response shapes are preserved. Exact schema changes are in [db/SCHEMA_CHANGES.md](db/SCHEMA_CHANGES.md).
+# Drive Luxury legacy adapter backend — 2.6.2
 
-For the 10 November release candidate, read [PRODUCTION_RELEASE_GUIDE.md](docs/PRODUCTION_RELEASE_GUIDE.md). It includes the native extras/pricing corrections, cross-application vehicle locking, cumulative schema delta and required real-admin/provider acceptance. Historical release notes below do not authorize replaying old migration files.
+This is the complete updated Node.js API based on the supplied release-v4 archive. Bookings, billable prices, payments, vehicle allocations and chauffeur assignments use the client's existing native records. Existing mobile endpoint paths and JSON response keys are retained.
 
-The historical notes below describe earlier releases. Use the client upgrade runner for this package rather than applying individual historical SQL migrations.
+## Deploy
 
-# Drive Luxury Backend — Release 1
+1. Use Node.js 24 LTS, or a Node version satisfying package.json.
+2. Copy `.env.example` to `.env` and configure the existing database connection and your deployment credentials. Keep the same JWT secrets as your current deployment if existing sessions should continue.
+3. Run `npm ci --omit=dev`.
+4. Run `npm run db:client:verify`. This only reads `information_schema`; it never repairs or alters the database.
+5. Run `npm start`, or build and run the included Dockerfile. The server verifies the existing schema before accepting requests.
 
-Production-oriented Express 5 / MySQL API for:
+**Do not run schema migrations.** No migrations, schema installers, compatibility views or trigger installers are required or included. The old `npm run migrate` entry point deliberately exits without changing the database. The application database executor rejects DDL.
 
-- Client + Agency Agent mobile application
-- Chauffeur mobile application
-- Existing back-office integration
+The database must match the supplied `Dump20261112` schema. That dump already contains mobile session/draft/payment-attempt tables and mobile metadata columns; this release reuses them. It does not create replacements. If production lacks an existing required object, verification reports the difference and stops; the code does not invent storage.
 
-It is based on the supplied backend's technology choices but replaces its rental-inspection Agent interpretation with the correct Agency Agent model.
+For production set `NODE_ENV=production`, `PAYMENT_PROVIDER=stripe`, real matching Stripe secret/publishable/webhook keys, your Google client IDs and Maps keys, and SMTP configuration. Production explicitly rejects mock payments and unverified route distances. Retain your existing private file storage configuration. `.do/app.yaml.example` includes deployment placeholders. No client credentials are bundled.
 
-## Included
+Register the existing Stripe webhook URL `https://YOUR_API/api/v1/payments/webhook` using the correct signing secret. Route access and booking ownership checks remain in place. The provider remains Stripe for the mobile contract; Laravel's PayEngine implementation is analyzed, not substituted into the mobile API.
 
-- Client registration, password login, verified Google login, refresh rotation and logout
-- SMTP password-reset delivery with single-use 30-minute tokens
-- Read/update profile APIs for Client, Agency Agent and Chauffeur roles
-- Invitation-only Agency Agent and Chauffeur onboarding
-- Five-service catalog: Chauffeur, Transfer, Car Rental, Airport VIP, Concierge
-- Active country/city lookup, GPS-name-to-database-ID resolution and service-filtered country availability
-- Class-first, multi-leg booking drafts, country/city/date-aware physical-vehicle availability, legacy seasonal/duration/distance pricing and quote snapshots
-- Google Places New autocomplete/details and optional Google Routes verified distance for distance-sensitive pricing
-- Legacy-compatible reservation/detail/itinerary/cost/payment writes
-- Agency roster, per-client bookings, alerts and commission visibility
-- Stripe PaymentIntents, signature-verified webhooks, refunds and mock mode for development
-- Expo push notifications for the two mobile applications
-- Stripe-confirmed automatic booking confirmation, physical-vehicle allocation at checkout and back-office chauffeur assignment
-- Date-filtered available Chauffeur discovery for operations
-- Assignment-level state machine, acknowledgement, GPS, expenses and incidents
-- Shared Client/Agent tracking with throttled GPS updates, stale-location state and Socket.IO recovery
-- Secure booking chat, unread counts, read receipts and in-app/Expo new-message notifications
-- DigitalOcean Spaces public/private storage separation with signed private downloads
-- Production-safe disabled masked calling plus a pluggable telecom-provider boundary
-- Agent/Chauffeur invitation email templates and resend workflow
-- Authorization-gated invoice API adapter prepared for the existing invoice table
-- Approved booking changes are applied/repriced by this backend; cancellations use Stripe refunds
-- Agency commissions remain owned by the existing website/Operations system; this API reads them without recalculation
-- Existing fleet blocks, reservation calendars, vehicle replacement history and activity logs are reused instead of duplicated
-- Swagger UI and OpenAPI 3.0 JSON
+## New in 2.6.2
 
-Rental inspections and all AI/OCR/predictive features are deferred. See [docs/RELEASE_1_FLOW.md](docs/RELEASE_1_FLOW.md).
+- Dated `CAR_RENTAL` catalog results follow Laravel's pickup season, nearest rental-day duration band, active country/global rate precedence and positive-base-fare display rule. Historical minimum rates no longer determine the rental list or its order.
+- Rental capacity comes from the same eligible pickup-city-preferred vehicle used by checkout. Rental quotes exclude inactive price rows.
+- Chauffeur and transfer catalog behavior, the agency fixes from 2.6.1, existing response keys and shared physical availability policy are retained. See [docs/RENTAL_SEARCH_FIX.md](docs/RENTAL_SEARCH_FIX.md) for request requirements and acceptance testing.
 
-## Requirements
+## Included from 2.6.1
 
-- Node.js 22.12+ (Node 24 tested)
-- MySQL 8+
-- Existing client MySQL 8 schema upgraded with the guarded client runner; verify against a staging clone before production.
+- A newly seeded Workbench agency now includes an assigned test client, so the agent can immediately create a client booking draft.
+- The agent dashboard counts all current reservations belonging to the authenticated agency, matching the website's agency reservation scope.
+- Dashboard and commission-list values read active native `agency_commissions` rows on active reservation details. Commission remains `(base_rate - discount) × agencies.commission / 100`, with website whole-money rounding.
 
-## Setup
+- Client, chauffeur and agent self deletion with password or linked Google reauthentication; ADMIN deletion by profile ID. Native soft deletion revokes sessions, push and chat access while retaining booking/receipt history.
+- Website-style hourly, daily and transfer cost details through additional draft/booking payment-breakdown endpoints.
+- A class-specific booking-options endpoint exposes class-mapped extras and separate native insurance choices.
+- Booking chat reconciles late/returning/removed chauffeurs and assigned agents, accepts `text` inputs alongside `body`, fixes read boundaries, and validates live socket membership before delivery.
+
+Existing endpoint response shapes and the original OpenAPI file remain unchanged. Seven requested operations are documented in a separate OpenAPI add-on. No schema changes or migrations are required.
+
+See [docs/MOBILE_SCREEN_INTEGRATION.md](docs/MOBILE_SCREEN_INTEGRATION.md) for exact screen-to-API wiring, screenshots and rental table mappings. This ZIP contains the backend; the actual React Native app source was not attached, so app screens and buttons were not edited.
+
+## Main changes
+
+- Additional customer charges use active `reservation_details`/`reservation_costs` rows, including fee-only extra-service rows. Completed rides remain completed while the outstanding balance is payable through the existing payment retry API.
+- Outstanding amount is active billable total minus active, non-deleted reservation payments, excluding unrelated custom-invoice payments. Unpaid fares and extras merge into one amount. Driver reimbursements and provider/operating costs are never silently billed to the customer.
+- Class-mapped public rental options follow Laravel's class pivot instead of an additional service-type filter. Quote math applies tax only to the discounted base fee, preserving CHF VAT and whole-total rounding.
+- Public inventory uses the website's country coverage, service mapping and inclusive reserved-date ledger, preferring the pickup city and then falling back to the country. Operational availability keeps its separate stricter query.
+- Native numeric parent status, native trip selectors, active legs, prices, current vehicle and driver rows override stale optional mobile metadata. Database views and metadata triggers are replaced with SQL projections and application reconciliation.
+- Season, duration and rate selection follow the supplied PHP lookup order, and textual city aliases can resolve static transfer rates.
+
+Read [docs/LEGACY_ADAPTER_REPORT.md](docs/LEGACY_ADAPTER_REPORT.md) for exact table mappings, payment examples, source-code references, parity limits and findings.
+
+## Verification
 
 ```bash
-cp .env.example .env
 npm ci
-# Configure .env, stop both PHP and Node writers for the database upgrade
-npm run db:client:plan
-npm run db:client:upgrade
-npm run db:client:verify
-npm test
-npm run dev
+npm run build
 ```
 
-Swagger UI: `http://localhost:3000/docs`
+The build runs syntax checking, the unchanged original route/OpenAPI contract gate, additive operation coverage, lint, and unit tests. Test-only JWT values are confined to Vitest configuration.
 
-OpenAPI JSON: `http://localhost:3000/openapi.json`
-
-Browser password-reset page: `http://localhost:3000/reset-password?token=...`
-
-## Deployment order
-
-1. Restore/snapshot the target database in staging.
-2. Configure Google OAuth client IDs, Infomaniak SMTP, Stripe, Expo, DB TLS and private storage credentials.
-3. Run `npm run db:client:plan` and review the cumulative DBA request.
-4. In maintenance mode run `npm run db:client:upgrade` and `npm run db:client:verify`. Do not replay old migrations.
-5. Compare seasonal, duration, transfer, pickup/collection, option and tax quotes against PHP production examples.
-6. Complete actual PHP admin/mobile/provider acceptance on staging. Fixture integration tests require a separate disposable empty schema.
-7. Deploy the matching API and reviewed database upgrade. Existing mobile endpoints and responses are retained.
-
-## Security decisions
-
-- Access tokens re-check current user status and role on every request.
-- Google ID tokens are signature-, issuer-, expiry- and audience-verified by Google's official library.
-- A Google identity can link to only one local user; new Google accounts may create Client profiles only.
-- Password-reset tokens are hashed at rest, expire after 30 minutes and revoke active refresh sessions after use.
-- Agent and Chauffeur accounts cannot self-register.
-- Private files are never exposed as a public static directory.
-- Chat attachments must belong to the sender, match the booking, and remain unexpired.
-- Public CDN media and private booking documents use different object prefixes and ACL paths.
-- Checkout is idempotent.
-- Stripe webhooks use Stripe SDK signature verification and event IDs are replay-protected.
-- Device IDs and push tokens have a single owner.
-- Confirmed bookings use reviewed change/cancellation requests.
-- The API privately selects an eligible physical vehicle at quote time and locks/holds it at checkout; clients see only classes.
-- Client/Agent catalog results contain only vehicle classes backed by `status=1` available vehicles; statuses 0 and 2–7 are internal and never exposed as choices.
-
-## Documentation
-
-- [Release 1 flow](docs/RELEASE_1_FLOW.md)
-- [Frontend API integration flow](docs/API_INTEGRATION_FLOW.md)
-- [Frontend screen-to-API guide](docs/FRONTEND_SCREEN_API_GUIDE.md)
-- [Location and availability API flow](docs/LOCATION_AVAILABILITY_API_FLOW.md)
-- [Animated frontend API flow](docs/FRONTEND_API_FLOW_ANIMATED.html)
-- [Complete frontend API flow](docs/ALL_76_API_FRONTEND_FLOW.md)
-- [Animated frontend API flow](docs/ALL_76_API_FLOW_ANIMATED.html)
-- [Database changes](docs/DATABASE_CHANGES.md)
-- [Reservation header, leg and chauffeur consolidation (migrations 008-009)](docs/RESERVATION_LEG_AND_DRIVER_CONSOLIDATION.md)
-- [DigitalOcean deployment](docs/DIGITALOCEAN_DEPLOYMENT.md)
-- [Production communication, tracking and storage integration](docs/PRODUCTION_INTEGRATIONS.md)
-- [OpenAPI contract](docs/openapi.json)
-- [Validation report](docs/VALIDATION_REPORT.md)
-- [Google login, password recovery and profile integration](docs/AUTH_AND_PROFILE_APIS.md)
-
-## Important integration notes
-
-- **Database release 009:** Add mobile leg/assignment columns to the existing `reservation_details` and `reservation_drivers` tables, and repoint four child-table FKs. Apply after 008 on a verified staging backup **before running this code**; old extension tables remain for rollback. `npm run reservation:relations-check` runs static checks.
-- `PAYMENT_PROVIDER=mock` is for local development only. Use `PAYMENT_PROVIDER=stripe` for staging and production.
-- `.env.example` contains placeholders only. Never commit Stripe secret or webhook-signing keys.
-- Mobile apps must register an Expo push token in the existing login device payload.
-- Masked calling defaults to disabled and returns an explicit `503` until a telecom adapter is registered. Mock calling is blocked in production.
-- Password-reset and account-invitation emails use authenticated SMTP. Invitation resend expires every older unused token before creating a new seven-day token.
-- DigitalOcean App Platform deployment trusts exactly one proxy hop so `express-rate-limit` can identify clients from forwarded IP headers.
-- Invoice access reads existing `reservation_invoices` and `reservation_invoice_details` when `INVOICE_ADAPTER=legacy`; Operations still owns invoice creation.
-- Agent and Chauffeur Google login works only for an existing active invited account with the same verified email; Google login never self-registers those roles.
-- Existing historical website reservations are not automatically visible to mobile clients because they lack `reservations.service_code`; this preserves previous mobile visibility. See `docs/RESERVATIONS_SINGLE_TABLE_CONSOLIDATION.md` before deploying the schema change or planning a reviewed backfill.
-- `GOOGLE_PLACES_API_KEY` enables address autocomplete. Distance-based production quotes also require an authorized Routes API key and `GOOGLE_ROUTES_ENABLED=true`; no submitted kilometres are trusted in production.
-- Unpaid checkout holds expire after the quotation window; signed Stripe payment-success events confirm legacy `reservations.status=1` and `payment_status=20` automatically.
-- See [Legacy compatibility and staging checklist](docs/LEGACY_PARITY_STAGING.md) before pointing this release at the shared website database.
-
-## Expo notification delivery (Client, Agent and Chauffeur apps)
-
-- Existing notification inbox, booking/assignment/chat/Stripe alerts and Socket.IO events are preserved.
-- Mobile users may register or refresh tokens without re-login using `PUT /api/v1/notifications/devices`.
-- `GET /api/v1/notifications/unread-count` enables a native tab badge; `GET /notifications?unreadOnly=true` filters the inbox.
-- New notification jobs/tickets tables are added by `migrations/005_expo_notification_delivery.sql`. **Run `npm run migrate` on a backed-up staging clone before deploying this update.**
-- The worker retries enqueue/delivery failures, checks Expo receipts, and unregisters device tokens reported as `DeviceNotRegistered`.
-- `expo-server-sdk@7.2` requires Node 22.12 or newer. Configure the deployment runtime appropriately.
-- Expo React Native setup instructions, recipient/event matrix, rollout checks and a copyable TypeScript helper are in [docs/EXPO_NOTIFICATIONS_INTEGRATION.md](docs/EXPO_NOTIFICATIONS_INTEGRATION.md) and [examples/expo/driveLuxuryNotifications.ts](examples/expo/driveLuxuryNotifications.ts).
-- With no actual Expo frontend ZIP uploaded, the TypeScript example is **not yet integrated into the production React Native project**.
-
-## Optional database-backed API request/response logs
-
-The current console access logs (Morgan) are unchanged. To also save redacted API
-request/response diagnostics (HTTP method, path, status, duration, safe JSON bodies,
-query parameters, authenticated user ID, and client IP) to MySQL, run:
+For integration tests, import the supplied dump into an **empty disposable database**, configure that database in the environment, then run:
 
 ```bash
-npm run audit:setup
-# set API_AUDIT_LOG_ENABLED=true in the backend environment
-npm start
+NODE_ENV=test PAYMENT_PROVIDER=mock ALLOW_UNVERIFIED_DISTANCE=true \
+CLIENT_DB_TEST_DISPOSABLE=true npm run test:legacy-adapters
 ```
 
-The new table is `app_api_request_logs`, created by additive migration
-`migrations/007_api_request_audit_logs.sql`. `npm run audit:setup` installs **only**
-this table; it does not rerun older migrations or bypass historical checksums.
+For the new account/chat/payment display tests on the same disposable database, also run:
 
-See [API_DATABASE_REQUEST_LOGGING.md](docs/API_DATABASE_REQUEST_LOGGING.md) for
-sample MySQL queries, privacy redaction, retention, queue behavior and testing.
+```bash
+NODE_ENV=test PAYMENT_PROVIDER=mock ALLOW_UNVERIFIED_DISTANCE=true \
+CLIENT_DB_TEST_DISPOSABLE=true npm run test:mobile-enhancements
+```
 
+These commands insert synthetic fixtures into existing tables. Never run fixture tests on production or a populated client database. It does not install schema objects. Integration tests check all original columns, indexes, foreign keys and the absence of newly installed triggers.
 
-**Reservation metadata storage:** As of the November 2026 consolidation, runtime booking flows store mobile-specific metadata on `reservations`, not `app_reservation_meta`. Apply migration 008 before starting the updated API; see `docs/RESERVATIONS_SINGLE_TABLE_CONSOLIDATION.md`.
+The included validation report states exactly what was executed. Integration validation used MariaDB 11.8 with the client's MySQL 8.4 schema imported unchanged; live MySQL 8.4, live provider credentials, actual client data and the separate website UI still need deployment acceptance testing.
+
+For a read-only inventory comparison on your populated database:
+
+```bash
+npm run availability:diagnose -- --country-id 1 --service-code CHAUFFEUR \
+  --start-at 2027-01-10T10:00:00Z --end-at 2027-01-10T12:00:00Z
+```
+
+Use the same country, city and dates as the website. This compares candidate IDs; the website's final route-dependent fare display gate is explained in the report.

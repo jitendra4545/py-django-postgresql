@@ -1,3 +1,4 @@
+import { nativeServiceCodeSql, nativeCurrencySql, nativeLifecycleSql, nativeLegStatusSql } from './legacy-reservation-adapter.js';
 import { MOBILE_BOOKING_STATUS_EVENTS } from './mobile-status-events.js';
 import { one, query } from '../db/pool.js';
 import { notFound } from '../common/errors.js';
@@ -10,9 +11,9 @@ export const loadBookingView = async (reservationId) => {
   const booking = await one(
     `SELECT r.id, r.uuid, r.reservation_no AS reservationNo, r.customer_id AS customerId,
             r.agency_id AS agencyId, r.status AS legacyStatus, r.payment_status AS paymentStatus,
-            r.created_at AS createdAt, arm.service_code AS serviceCode,
-            arm.lifecycle_status AS status, arm.source_channel AS sourceChannel,
-            arm.created_by_agent_id AS createdByAgentId, arm.currency_code AS currency
+            r.created_at AS createdAt, ${nativeServiceCodeSql()} AS serviceCode,
+            ${nativeLifecycleSql()} AS status, COALESCE(arm.source_channel,'WEBSITE') AS sourceChannel,
+            arm.created_by_agent_id AS createdByAgentId, ${nativeCurrencySql()} AS currency
        FROM reservations r
        JOIN reservations arm ON arm.id=r.id
       WHERE r.id = ? AND r.deleted_at IS NULL`,
@@ -32,7 +33,7 @@ export const loadBookingView = async (reservationId) => {
               COALESCE(rlm.passenger_count,1) AS passengerCount, COALESCE(rlm.luggage_count,0) AS luggageCount,
               rd.pick_up_country_id,rd.pick_up_city_id,rd.pick_up_city,rd.drop_off_country_id,rd.drop_off_city_id,rd.drop_off_city,
               rlm.pickup_details AS pickupDetails, rlm.dropoff_details AS dropoffDetails,
-              COALESCE((SELECT fn.flight_number FROM reservation_flight_numbers fn WHERE fn.reservation_details_id=rd.id ORDER BY fn.id DESC LIMIT 1),rlm.flight_number) AS flightNumber, rlm.mobile_leg_status AS status
+              COALESCE((SELECT fn.flight_number FROM reservation_flight_numbers fn WHERE fn.reservation_details_id=rd.id ORDER BY fn.id DESC LIMIT 1),rlm.flight_number) AS flightNumber, ${nativeLegStatusSql()} AS status
          FROM reservation_details rd
          JOIN reservation_details rlm ON rlm.id = rd.id
         WHERE rd.reservation_id = ? AND rd.status=1 AND rd.deleted_at IS NULL AND COALESCE(rd.is_extra_service,0)=0
@@ -58,7 +59,8 @@ export const loadBookingView = async (reservationId) => {
               d.full_name AS chauffeurName, d.photo AS chauffeurPhoto
          FROM ${MOBILE_DRIVER_ASSIGNMENTS} ada
          JOIN drivers d ON d.id = ada.driver_id
-        WHERE ada.reservation_id = ? AND ada.status <> 'CANCELLED'
+        WHERE ada.reservation_id = ? AND ada.status NOT IN ('CANCELLED','DECLINED')
+          AND EXISTS (SELECT 1 FROM app_mobile_assignment_ids role_map WHERE role_map.id=ada.id AND role_map.current_slot=1)
         ORDER BY ada.created_at DESC`,
       [reservationId],
     ),

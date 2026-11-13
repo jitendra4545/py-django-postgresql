@@ -1,4 +1,5 @@
 import Decimal from 'decimal.js';
+import {BOOKING_POLICY} from './booking-policy.js';
 
 const money = (value) => new Decimal(value ?? 0);
 const roundWhole = (value) => money(value).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber();
@@ -6,15 +7,10 @@ const roundTwo = (value) => money(value).toDecimalPlaces(2, Decimal.ROUND_HALF_U
 
 // The client website displays Swiss tax at the nearest CHF 0.05 (e.g.
 // 412 * 8.1% = 33.372 -> 33.35), but shows checkout totals in whole CHF.
-const taxLineAmount = (value, currency) =>
-  currency === 'CHF'
-    ? money(value)
-        .dividedBy('0.05')
-        .toDecimalPlaces(0, Decimal.ROUND_HALF_UP)
-        .times('0.05')
-        .toDecimalPlaces(2)
-        .toNumber()
-    : roundTwo(value);
+const taxLineAmount = (value, currency) => {
+  const step=BOOKING_POLICY.taxRounding[currency]??BOOKING_POLICY.taxRounding.other;
+  return money(value).div(step).toDecimalPlaces(0,Decimal.ROUND_HALF_UP).times(step).toDecimalPlaces(2).toNumber();
+};
 
 export const computeQuoteBreakdown = ({
   serviceCode,

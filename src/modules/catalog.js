@@ -8,6 +8,7 @@ import { availabilityDateParams, availableClassSql } from '../services/vehicle-a
 import { LEGACY_SERVICE_TYPES } from '../services/legacy-pricing-rules.js';
 import { websiteServiceToCatalogItem } from '../services/service-catalog.js';
 import { autocompletePlace, getPlaceDetails, getRoutePreview } from '../services/google-maps.js';
+import { listRentalVehicleClasses } from '../services/rental-catalog.js';
 
 const router = Router();
 const rentTypeByService = LEGACY_SERVICE_TYPES;
@@ -78,7 +79,7 @@ router.get(
            ON vcc.country_id=c.id AND vcc.deleted_at IS NULL
          JOIN vehicle_classes vc
            ON vc.id=vcc.vehicle_class_id AND vc.status=1 AND vc.deleted_at IS NULL
-          AND vc.can_reservation_from_website=1 AND vc.rental_type=?
+           AND vc.rental_type=?
          LEFT JOIN vehicle_class_price_rates pr
            ON pr.vehicle_class_id=vc.id AND pr.country_id IN (c.id,0)
           AND pr.rent_type=? AND pr.status=1
@@ -97,7 +98,7 @@ router.get(
              AND country_city.status=1 AND country_city.deleted_at IS NULL
            WHERE country_vehicle_city.vehicle_id=v.id
              AND country_vehicle_city.deleted_at IS NULL
-             AND (country_city.country_id=c.id OR UPPER(TRIM(country_vehicle_city.country))=UPPER(c.code))
+             AND UPPER(TRIM(country_vehicle_city.country))=UPPER(c.code)
           )
         ORDER BY c.name`,
       [
@@ -272,6 +273,9 @@ router.get(
   asyncHandler(async (request, response) => {
     const rentType = rentTypeByService[request.query.serviceCode];
     const withDates = Boolean(request.query.startAt);
+    if (request.query.serviceCode === 'CAR_RENTAL' && withDates) {
+      return response.json({ items: await listRentalVehicleClasses(request.query) });
+    }
     const classes = await query(
       `SELECT DISTINCT vc.id, vc.title, vc.description, vc.image,
               COALESCE(capacity.passengerCapacity, 0) AS passengerCapacity,
@@ -281,7 +285,7 @@ router.get(
          JOIN countries country ON country.id=? AND country.status=1 AND country.deleted_at IS NULL
          JOIN vehicle_class_countries vcc ON vcc.vehicle_class_id = vc.id
             AND vcc.country_id = ? AND vcc.deleted_at IS NULL
-         JOIN (
+         LEFT JOIN (
            SELECT vehicle_class_id, MIN(amount) AS startingPrice FROM (
              SELECT vehicle_class_id,CASE WHEN rent_type=3 AND rental_duration_id=10 THEN 0 ELSE amount END AS amount
                FROM vehicle_class_price_rates
@@ -300,9 +304,8 @@ router.get(
             WHERE v.deleted_at IS NULL AND v.status = 1 AND v.online_booking_status = 1
             GROUP BY v.vehicle_class_id
          ) capacity ON capacity.vehicle_class_id = vc.id
-        WHERE vc.status = 1 AND vc.deleted_at IS NULL AND vc.can_reservation_from_website = 1
+        WHERE vc.status = 1 AND vc.deleted_at IS NULL
           AND vc.rental_type=?
-          AND (capacity.passengerCapacity IS NULL OR capacity.passengerCapacity >= ?)
           ${availableClassSql({ withDates, withCity: Boolean(request.query.cityId) })}
         ORDER BY pr.startingPrice, vc.title`,
       [
@@ -315,11 +318,7 @@ router.get(
         rentType,
         request.query.countryId,
         rentType,
-        request.query.passengerCount,
-        request.query.startAt?.slice(0,10) ?? new Date().toISOString().slice(0,10),
-        request.query.passengerCount,
         rentType,
-        request.query.countryId,
         request.query.countryId,
         ...(withDates ? availabilityDateParams(request.query.startAt, request.query.endAt) : []),
       ],
@@ -348,7 +347,8 @@ router.get(
       `SELECT id, COALESCE(NULLIF(title_en,''),title) AS title, description, based_on AS basedOn, rate_type AS rateType,
               amount, 0 AS taxable
          FROM rental_options
-        WHERE rent_type = ? AND status = 1 AND show_on_frontend = 1 AND deleted_at IS NULL
+        WHERE show_on_frontend = 1 AND deleted_at IS NULL
+          AND (? IS NOT NULL OR rent_type=?)
           ${
             request.query.vehicleClassId
               ? `AND EXISTS (SELECT 1 FROM rental_option_classes roc
@@ -356,7 +356,7 @@ router.get(
               : ''
           }
         ORDER BY title`,
-      [rentType, ...(request.query.vehicleClassId ? [request.query.vehicleClassId] : [])],
+      [request.query.vehicleClassId ?? null,rentType, ...(request.query.vehicleClassId ? [request.query.vehicleClassId] : [])],
     );
     response.json({ items });
   }),

@@ -45,16 +45,9 @@ Configure the Voice API webhook in Telnyx Mission Control:
 
 Ensure the app proxy forwards HTTP POST intact and that TLS works. Only Telnyx should POST to this public endpoint. It uses the `telnyx-signature-ed25519` and `telnyx-timestamp` headers, verifies over the raw body, and rejects replay timestamps > 5 minutes away. Mobile apps do NOT send bearer tokens to the webhook.
 
-## Database migration
+## Existing database storage
 
-**New file:** `migrations/006_telnyx_masked_call_routes.sql`.
-
-The uploaded ZIP already has `005_expo_notification_delivery.sql`. Do not reuse migration version `005`. The new migration creates:
-
-- `app_telnyx_call_routes`: booking-authorized caller/recipient and Telnyx call-control IDs.
-- `app_telnyx_webhook_events`: deduplicate provider webhooks.
-
-Prerequisite: `app_masked_calls` table exists. **Do not recreate the client's existing MySQL database.** Your past `001_release_1_mobile_foundation.sql` checksum mismatch must be reconciled before using `npm run migrate` against a shared database. Compare the client's DB with the new migration, back it up, and apply the reviewed incremental SQL in staging first. MySQL DDL is not rolled back automatically by transactions.
+All required masked-calling tables and columns already exist in the supplied Dump20261112 schema. This adapter release installs no migrations. Run `npm run db:client:verify` to check the existing objects without changing them.
 
 ## Flow & request examples
 

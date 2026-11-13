@@ -3,6 +3,7 @@
 // make authentication, payment, or precise location data appear in the audit table.
 const SENSITIVE_KEY = /password|passwd|passphrase|secret|(?:api|private|public)[_-]?key|auth(?:orization|entication)?|cookie|(?:access|refresh|id|push|reset|verification|session|invitation)[_-]?token|token(?:[_-]?hash)?|otp|one[_-]?time|(?:^|[_-])pin$|cvv|cvc|card|iban|swift|bank[_-]?account|account[_-]?number|client[_-]?secret|signature|signed[_-]?url|(?:download|callback|redirect)[_-]?url|^url$|credential/i;
 const PERSONAL_KEY = /email|phone|mobile|telephone|(?:full|first|last|customer|passenger|recipient|contact)[_-]?name|^name$|street|address|original[_-]?name|filename|device[_-]?id|postal|zip[_-]?code|birth|dob|passport|identity|national[_-]?id|license[_-]?number|licence[_-]?number|place[_-]?id|latitude|longitude|^lat$|^lon$|^lng$|coordinate|gps|^location$|search|^input$|^q$/i;
+// eslint-disable-next-line no-useless-escape -- retain the established redaction expression
 const BANNED_CONTENT = /Bearer\s+[a-z\d._~+\/-]+|\b(?:sk_(?:test|live)_|pk_(?:test|live)_|whsec_|rk_(?:test|live)_)[a-z\d]+|ExponentPushToken\[[^\]]+\]|ExpoPushToken\[[^\]]+\]|\beyJ[a-z\d_-]+\.eyJ[a-z\d_-]+\.[a-z\d_-]+/gi;
 const EMAIL = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
 const E164_PHONE = /\+\d{7,15}\b/g;
@@ -14,6 +15,7 @@ const MAX_ARRAY = 30;
 
 export const redactText = (text) => {
   const value = String(text)
+    // eslint-disable-next-line no-control-regex -- strip control bytes from audit data
     .replace(/[\u0000-\u001f\u007f]/g, ' ')
     .replace(BANNED_CONTENT, '[REDACTED_SECRET]')
     .replace(EMAIL, '[REDACTED_EMAIL]')

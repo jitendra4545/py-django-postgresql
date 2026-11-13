@@ -1,3 +1,6 @@
+import { assertConversationAccess, reconcileConversationAudience, syncConversationsForUser } from '../services/conversation-audience.js';
+import { normalizeMessageInput } from '../services/message-input.js';
+import { NATIVE_DOCUMENTS, NATIVE_MESSAGES } from '../services/legacy-read-adapters.js';
 import { insertNativeMessage } from '../services/client-native-store.js';
 import { MOBILE_DRIVER_ASSIGNMENTS } from '../services/driver-assignment-storage.js';
 import { Router } from 'express';
@@ -32,43 +35,37 @@ const messageLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-const assertParticipant = async (auth, conversationId) => {
-  if ([ROLES.ADMIN, ROLES.STAFF].includes(auth.role)) return;
-  const participant = await one(
-    `SELECT id FROM app_conversation_participants WHERE conversation_id=? AND user_id=? AND left_at IS NULL`,
-    [conversationId, auth.userId],
-  );
-  if (!participant) throw forbidden('You are not a participant in this conversation');
-};
+const assertParticipant = assertConversationAccess;
 
 router.get(
   '/conversations',
   asyncHandler(async (request, response) => {
+    await syncConversationsForUser(request.auth);
     const { page, perPage, offset } = pagination(request.query);
     const items = await query(
       `SELECT c.id,c.reservation_id AS reservationId,c.status,c.updated_at AS updatedAt,
               r.reservation_no AS reservationNo,
               lm.id AS lastMessageId,lm.message_type AS lastMessageType,
               lm.body AS lastMessageBody,lm.created_at AS lastMessageAt,
-              (SELECT COUNT(*) FROM app_messages unread
+              (SELECT COUNT(*) FROM ${NATIVE_MESSAGES} unread
                 WHERE unread.conversation_id=c.id AND unread.deleted_at IS NULL
                   AND unread.sender_user_id<>?
                   AND EXISTS (SELECT 1 FROM reservation_message_recipients mr JOIN reservation_messages nm ON nm.id=mr.reservation_message_id WHERE COALESCE(nm.mobile_message_id,nm.id)=unread.id AND mr.user_id=cp.user_id AND mr.read_at IS NULL)) AS unreadCount
          FROM app_conversation_participants cp
          JOIN app_conversations c ON c.id=cp.conversation_id
          JOIN reservations r ON r.id=c.reservation_id
-         LEFT JOIN app_messages lm ON lm.id=(
-           SELECT m2.id FROM app_messages m2
+         LEFT JOIN ${NATIVE_MESSAGES} lm ON lm.id=(
+           SELECT m2.id FROM ${NATIVE_MESSAGES} m2
             WHERE m2.conversation_id=c.id AND m2.deleted_at IS NULL
             ORDER BY m2.created_at DESC,m2.id DESC LIMIT 1
          )
-        WHERE cp.user_id=? AND cp.left_at IS NULL
+        WHERE cp.user_id=? AND cp.left_at IS NULL AND r.deleted_at IS NULL
         ORDER BY COALESCE(lm.created_at,c.updated_at) DESC LIMIT ? OFFSET ?`,
       [request.auth.userId, request.auth.userId, perPage, offset],
     );
     const total = await one(
-      `SELECT COUNT(*) AS total FROM app_conversation_participants
-        WHERE user_id=? AND left_at IS NULL`,
+      `SELECT COUNT(*) AS total FROM app_conversation_participants cp JOIN app_conversations c ON c.id=cp.conversation_id
+        JOIN reservations r ON r.id=c.reservation_id WHERE cp.user_id=? AND cp.left_at IS NULL AND r.deleted_at IS NULL`,
       [request.auth.userId],
     );
     response.json(pageResponse(items, Number(total.total), page, perPage));
@@ -79,44 +76,10 @@ router.post(
   '/bookings/:reservationId/conversation',
   asyncHandler(async (request, response) => {
     const reservation = await getReservationForAccess(request.auth, request.params.reservationId);
-    const id = await transaction(async (connection) => {
-      const [existingRows] = await connection.execute(
-        'SELECT id FROM app_conversations WHERE reservation_id=?',
-        [reservation.id],
-      );
-      let conversationId = existingRows[0]?.id;
-      if (!conversationId) {
-        const [created] = await connection.execute(
-          `INSERT INTO app_conversations (reservation_id,status,created_at,updated_at) VALUES (?,'ACTIVE',NOW(),NOW())`,
-          [reservation.id],
-        );
-        conversationId = created.insertId;
-      }
-      await connection.execute(
-        `INSERT IGNORE INTO app_conversation_participants (conversation_id,user_id,participant_role,joined_at) SELECT ?,u.id,'CLIENT',NOW() FROM customers c JOIN users u ON u.id=c.user_id WHERE c.id=?`,
-        [conversationId, reservation.customer_id],
-      );
-      await connection.execute(
-        `INSERT IGNORE INTO app_conversation_participants (conversation_id,user_id,participant_role,joined_at) SELECT ?,d.user_id,'CHAUFFEUR',NOW() FROM ${MOBILE_DRIVER_ASSIGNMENTS} ada JOIN drivers d ON d.id=ada.driver_id WHERE ada.reservation_id=? AND ada.status NOT IN ('DECLINED','CANCELLED')`,
-        [conversationId, reservation.id],
-      );
-      await connection.execute(
-        `INSERT IGNORE INTO app_conversation_participants (conversation_id,user_id,participant_role,joined_at) SELECT ?,a.user_id,'AGENCY_AGENT',NOW() FROM app_agent_customer_assignments aca JOIN agents a ON a.id=aca.agent_id WHERE aca.customer_id=? AND aca.status='ACTIVE'`,
-        [conversationId, reservation.customer_id],
-      );
-      await connection.execute(
-        `INSERT IGNORE INTO app_conversation_participants (conversation_id,user_id,participant_role,joined_at) VALUES (?,?,?,NOW())`,
-        [
-          conversationId,
-          request.auth.userId,
-          request.auth.role === ROLES.STAFF || request.auth.role === ROLES.ADMIN
-            ? 'SUPPORT'
-            : 'MEMBER',
-        ],
-      );
-      return conversationId;
-    });
-    response.status(201).json({ id, reservationId: reservation.id, status: 'ACTIVE' });
+    const conversation = await transaction(connection => reconcileConversationAudience(connection, {
+      reservationId:reservation.id,create:true,actor:request.auth,
+    }));
+    response.status(201).json({ id:conversation.id, reservationId:reservation.id, status:conversation.status });
   }),
 );
 
@@ -126,11 +89,11 @@ router.get(
     await assertParticipant(request.auth, request.params.conversationId);
     const { page, perPage, offset } = pagination(request.query);
     const items = await query(
-      `SELECT m.id,m.sender_user_id AS senderUserId,u.full_name AS senderName,m.message_type AS messageType,m.body,m.document_id AS documentId,m.created_at AS createdAt FROM app_messages m JOIN users u ON u.id=m.sender_user_id WHERE m.conversation_id=? AND m.deleted_at IS NULL ORDER BY m.created_at DESC LIMIT ? OFFSET ?`,
+      `SELECT m.id,m.sender_user_id AS senderUserId,u.full_name AS senderName,m.message_type AS messageType,m.body,m.document_id AS documentId,m.created_at AS createdAt FROM ${NATIVE_MESSAGES} m JOIN users u ON u.id=m.sender_user_id WHERE m.conversation_id=? AND m.deleted_at IS NULL ORDER BY m.created_at DESC,m.id DESC LIMIT ? OFFSET ?`,
       [request.params.conversationId, perPage, offset],
     );
     const total = await one(
-      'SELECT COUNT(*) AS total FROM app_messages WHERE conversation_id=? AND deleted_at IS NULL',
+      `SELECT COUNT(*) AS total FROM ${NATIVE_MESSAGES} native_app_messages WHERE conversation_id=? AND deleted_at IS NULL`,
       [request.params.conversationId],
     );
     response.json(pageResponse(items.reverse(), Number(total.total), page, perPage));
@@ -144,9 +107,9 @@ router.post(
     await assertParticipant(request.auth, request.params.conversationId);
     const lastMessage = await one(
       request.body.lastMessageId
-        ? `SELECT id,created_at AS createdAt FROM app_messages
+        ? `SELECT id,created_at AS createdAt FROM ${NATIVE_MESSAGES} native_app_messages
             WHERE id=? AND conversation_id=? AND deleted_at IS NULL`
-        : `SELECT id,created_at AS createdAt FROM app_messages
+        : `SELECT id,created_at AS createdAt FROM ${NATIVE_MESSAGES} native_app_messages
             WHERE conversation_id=? AND deleted_at IS NULL
             ORDER BY created_at DESC,id DESC LIMIT 1`,
       request.body.lastMessageId
@@ -165,8 +128,9 @@ router.post(
     );
     await query(`UPDATE reservation_message_recipients mr JOIN reservation_messages m ON m.id=mr.reservation_message_id
       JOIN app_conversations c ON c.reservation_id=m.reservation_id SET mr.read_at=COALESCE(mr.read_at,NOW()),mr.updated_at=NOW()
-      WHERE c.id=? AND mr.user_id=? AND m.created_at<=?`,[request.params.conversationId,request.auth.userId,readAt]);
-    emitToConversation(request.params.conversationId, 'conversation.read', {
+      WHERE c.id=? AND mr.user_id=? AND (m.created_at<? OR (m.created_at=? AND COALESCE(m.mobile_message_id,m.id)<=?))`,
+      [request.params.conversationId,request.auth.userId,readAt,readAt,lastMessage?.id??0]);
+    await emitToConversation(request.params.conversationId, 'conversation.read', {
       conversationId: Number(request.params.conversationId),
       userId: request.auth.userId,
       lastMessageId: lastMessage?.id ?? null,
@@ -180,7 +144,7 @@ router.post(
   '/conversations/:conversationId/messages',
   messageLimiter,
   validate(
-    z
+    z.preprocess(normalizeMessageInput, z
       .object({
         messageType: z.enum(['TEXT', 'DOCUMENT']).default('TEXT'),
         body: z.string().max(4000).optional(),
@@ -190,10 +154,11 @@ router.post(
         if (value.messageType === 'TEXT' && !value.body?.trim()) {
           context.addIssue({ code: 'custom', message: 'Text messages require a body' });
         }
+        if (value.messageType === 'TEXT' && value.documentId) context.addIssue({code:'custom',message:'A document attachment requires DOCUMENT messageType'});
         if (value.messageType === 'DOCUMENT' && !value.documentId) {
           context.addIssue({ code: 'custom', message: 'Document messages require documentId' });
         }
-      }),
+      })),
   ),
   asyncHandler(async (request, response) => {
     await assertParticipant(request.auth, request.params.conversationId);
@@ -205,7 +170,7 @@ router.post(
       throw notFound('Active conversation not found');
     if (request.body.documentId) {
       const document = await one(
-        `SELECT id,owner_user_id,reservation_id,expires_at FROM app_documents
+        `SELECT id,owner_user_id,reservation_id,expires_at FROM ${NATIVE_DOCUMENTS} native_app_documents
           WHERE id=? AND deleted_at IS NULL`,
         [request.body.documentId],
       );
@@ -220,6 +185,7 @@ router.post(
       }
     }
     const result = await transaction(async (connection) => {
+      await assertConversationAccess(request.auth,conversation.id,connection);
       const created = await insertNativeMessage(connection,{
         conversationId:conversation.id,userId:request.auth.userId,
         body:request.body.body?.trim()??null,documentId:request.body.documentId??null,
@@ -244,7 +210,7 @@ router.post(
       documentId: request.body.documentId ?? null,
       createdAt: new Date().toISOString(),
     };
-    emitToConversation(conversation.id, 'message.created', message);
+    await emitToConversation(conversation.id, 'message.created', message);
     const recipients = await query(
       `SELECT user_id AS userId FROM app_conversation_participants
         WHERE conversation_id=? AND user_id<>? AND left_at IS NULL`,

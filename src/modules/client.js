@@ -1,3 +1,4 @@
+import { nativeServiceCodeSql, nativeLifecycleSql } from '../services/legacy-reservation-adapter.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../common/async-handler.js';
@@ -30,28 +31,28 @@ router.get(
   asyncHandler(async (request, response) => {
     const [upcoming, active, recent] = await Promise.all([
       query(
-        `SELECT r.id, r.reservation_no AS reservationNo, arm.service_code AS serviceCode,
-              arm.lifecycle_status AS status, MIN(rd.pick_up_date) AS serviceDate
+        `SELECT r.id, r.reservation_no AS reservationNo, ${nativeServiceCodeSql()} AS serviceCode,
+              ${nativeLifecycleSql()} AS status, MIN(rd.pick_up_date) AS serviceDate
          FROM reservations r JOIN reservations arm ON arm.id=r.id
-         JOIN reservation_details rd ON rd.reservation_id=r.id AND rd.deleted_at IS NULL
+         JOIN reservation_details rd ON rd.reservation_id=r.id AND rd.status=1 AND COALESCE(rd.is_extra_service,0)=0 AND rd.deleted_at IS NULL
         WHERE r.customer_id=? AND r.deleted_at IS NULL AND rd.pick_up_date >= CURRENT_DATE
-          AND arm.lifecycle_status NOT IN ('COMPLETED','CANCELLED')
-        GROUP BY r.id, arm.service_code, arm.lifecycle_status ORDER BY serviceDate LIMIT 5`,
+          AND ${nativeLifecycleSql()} NOT IN ('COMPLETED','CANCELLED')
+        GROUP BY r.id ORDER BY serviceDate LIMIT 5`,
         [request.auth.customerId],
       ),
       one(
-        `SELECT r.id, r.reservation_no AS reservationNo, arm.service_code AS serviceCode,
-              arm.lifecycle_status AS status
+        `SELECT r.id, r.reservation_no AS reservationNo, ${nativeServiceCodeSql()} AS serviceCode,
+              ${nativeLifecycleSql()} AS status
          FROM reservations r JOIN reservations arm ON arm.id=r.id
-        WHERE r.customer_id=? AND arm.lifecycle_status IN ('PREPARING','ON_THE_WAY','ARRIVED','WAITING','PASSENGER_ONBOARD','IN_SERVICE','AT_STOP','DROPOFF_REACHED')
+        WHERE r.customer_id=? AND ${nativeLifecycleSql()} IN ('PREPARING','ON_THE_WAY','ARRIVED','WAITING','PASSENGER_ONBOARD','IN_SERVICE','AT_STOP','DROPOFF_REACHED')
         ORDER BY r.updated_at DESC LIMIT 1`,
         [request.auth.customerId],
       ),
       query(
-        `SELECT r.id, r.reservation_no AS reservationNo, arm.service_code AS serviceCode,
-              arm.lifecycle_status AS status
+        `SELECT r.id, r.reservation_no AS reservationNo, ${nativeServiceCodeSql()} AS serviceCode,
+              ${nativeLifecycleSql()} AS status
          FROM reservations r JOIN reservations arm ON arm.id=r.id
-        WHERE r.customer_id=? AND arm.lifecycle_status IN ('COMPLETED','CANCELLED')
+        WHERE r.customer_id=? AND ${nativeLifecycleSql()} IN ('COMPLETED','CANCELLED')
         ORDER BY r.updated_at DESC LIMIT 5`,
         [request.auth.customerId],
       ),

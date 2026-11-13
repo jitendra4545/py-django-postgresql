@@ -1,3 +1,4 @@
+import { NATIVE_NOTIFICATIONS } from './legacy-read-adapters.js';
 import { env } from '../config/env.js';
 import { AppError, notFound } from '../common/errors.js';
 import { one, query } from '../db/pool.js';
@@ -27,7 +28,7 @@ export const enqueueSelfTestNotification = async (userId, { title, body } = {}) 
 
   // A per-user database window works across multiple Render/server replicas.
   const recent = await one(
-    `SELECT COUNT(*) AS total FROM app_notifications
+    `SELECT COUNT(*) AS total FROM ${NATIVE_NOTIFICATIONS} native_app_notifications
       WHERE user_id=? AND type='TEST_PUSH'
         AND created_at > DATE_SUB(NOW(), INTERVAL 10 MINUTE)`,
     [userId],
@@ -59,7 +60,7 @@ export const getSelfTestNotificationStatus = async (userId, notificationId) => {
     `SELECT n.id AS notificationId,n.created_at AS createdAt,
             j.id AS jobId,j.status AS jobStatus,j.attempts,
             j.last_error AS lastError
-       FROM app_notifications n
+       FROM ${NATIVE_NOTIFICATIONS} n
        LEFT JOIN app_push_delivery_jobs j
          ON j.notification_id=n.id AND j.user_id=n.user_id
       WHERE n.id=? AND n.user_id=? AND n.type='TEST_PUSH'`,

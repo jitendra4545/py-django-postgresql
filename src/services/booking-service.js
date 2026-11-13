@@ -1,3 +1,4 @@
+import {assertVehicleCapacity} from './vehicle-capacity.js';
 import { recordBookingStatusEvent } from './mobile-status-events.js';
 import crypto from 'node:crypto';
 import { v4 as uuid } from 'uuid';
@@ -54,13 +55,13 @@ export const buildDraftQuote = async (draft) => {
       passengerCount: details.passenger?.count ?? 1,
       luggageCount: details.passenger?.luggageCount ?? 0,
     });
-    const vehicle = candidates.find(
-      (candidate) =>
-        !selected.some(
-          (previous) =>
-            previous.vehicleId === candidate.id && previous.start < end && previous.end > start,
-        ),
-    );
+    let vehicle;
+    for(const candidate of candidates){
+      if(selected.some(previous=>previous.vehicleId===candidate.id&&previous.start<end&&previous.end>start))continue;
+      try { await assertVehicleCapacity(null,candidate.id,details.passenger?.count??1,details.passenger?.luggageCount??0); }
+      catch(error){if(error.code==='VEHICLE_CAPACITY_EXCEEDED')continue;throw error;}
+      vehicle=candidate;break;
+    }
     if (!vehicle) {
       throw new AppError(
         409,
@@ -154,6 +155,7 @@ export const createLegacyReservation = async (connection, { draft, quote, auth }
       passengerCount: details.passenger?.count ?? 1,
       luggageCount: details.passenger?.luggageCount ?? 0,
     });
+    await assertVehicleCapacity(connection,quoted.vehicleId,details.passenger?.count??1,details.passenger?.luggageCount??0);
     if (!available.some((vehicle) => Number(vehicle.id) === Number(quoted.vehicleId))) {
       throw new AppError(
         409,

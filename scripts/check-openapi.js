@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 
 const modules = {
+  'src/modules/mobile-enhancements.js': '',
   'src/modules/auth.js': '/auth',
   'src/modules/catalog.js': '/catalog',
   'src/modules/bookings.js': '/bookings',
@@ -31,6 +32,7 @@ for (const [filename, prefix] of Object.entries(modules)) {
 
 const spec = JSON.parse(fs.readFileSync('docs/openapi.json', 'utf8'));
 Object.assign(spec.paths,JSON.parse(fs.readFileSync('docs/operations-workspace-openapi.json','utf8')).paths);
+Object.assign(spec.paths,JSON.parse(fs.readFileSync('docs/mobile-enhancements-openapi.json','utf8')).paths);
 const documented = new Set();
 for (const [path, pathItem] of Object.entries(spec.paths)) {
   for (const method of ['get', 'post', 'put', 'patch', 'delete']) {

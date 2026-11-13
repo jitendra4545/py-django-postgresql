@@ -1,3 +1,4 @@
+import mobileEnhancementsRouter from './modules/mobile-enhancements.js';
 import compression from 'compression';
 import cors from 'cors';
 import express from 'express';
@@ -27,6 +28,7 @@ import { enqueueApiAuditLog } from './services/api-audit-log.js';
 const openapi = JSON.parse(readFileSync(new URL('../docs/openapi.json', import.meta.url), 'utf8'));
 const operationsAddon=JSON.parse(readFileSync(new URL('../docs/operations-workspace-openapi.json',import.meta.url),'utf8'));
 Object.assign(openapi.paths,operationsAddon.paths);
+Object.assign(openapi.paths,JSON.parse(readFileSync(new URL('../docs/mobile-enhancements-openapi.json',import.meta.url),'utf8')).paths);
 const publicDirectory = fileURLToPath(new URL('../public', import.meta.url));
 const resetPasswordPage = fileURLToPath(new URL('../public/reset-password.html', import.meta.url));
 const app = express();
@@ -66,7 +68,7 @@ app.use(express.urlencoded({ extended: false, limit: '1mb' }));
 app.use(morgan(env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(rateLimit({ windowMs: 60_000, limit: 300, standardHeaders: true, legacyHeaders: false }));
 
-app.get('/health', (_request, response) => response.json({ status: 'ok', version: '2.3.0' }));
+app.get('/health', (_request, response) => response.json({ status: 'ok', version: '2.6.2' }));
 app.use(
   '/reset-assets',
   express.static(publicDirectory, {
@@ -98,6 +100,8 @@ app.use(`${env.API_PREFIX}/payments`, paymentRouter);
 app.use(`${env.API_PREFIX}/operations`, operationsRouter);
 app.use(`${env.API_PREFIX}/notifications`, notificationRouter);
 app.use(`${env.API_PREFIX}/documents`, documentRouter);
+
+app.use(`${env.API_PREFIX}`,mobileEnhancementsRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

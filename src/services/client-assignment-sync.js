@@ -1,3 +1,4 @@
+import { nativeLegStatusSql } from './legacy-reservation-adapter.js';
 import * as realtime from './realtime.js';
 import { syncNativeStatusEvents } from './client-status-sync.js';
 import { transaction, query } from '../db/pool.js';
@@ -22,7 +23,7 @@ export async function reconcileNativeRows(connection,{reservationId=null,driverI
   if(!all&&!reservationId&&!driverId&&!nativeId)clauses.push('(rd.updated_at>=DATE_SUB(NOW(),INTERVAL 2 DAY) OR d.drop_off_date>=CURRENT_DATE)');
   const [rows]=await connection.execute(`SELECT rd.*,r.service_type,d.is_extra_service,d.status AS detail_status,d.deleted_at AS detail_deleted,
     d.pick_up_date AS detail_pick_up_date,d.pick_up_time AS detail_pick_up_time,d.drop_off_date AS detail_drop_off_date,d.drop_off_time AS detail_drop_off_time,
-    r.status AS parent_status,r.deleted_at AS parent_deleted,d.trip_status_updated_at,d.mobile_leg_status,(SELECT u.role FROM users u WHERE u.id=d.trip_status_updated_by LIMIT 1) AS trip_actor_role,TIMESTAMP(COALESCE(rd.pick_up_date,d.pick_up_date),COALESCE(rd.pick_up_time,d.pick_up_time)) AS starts,
+    r.status AS parent_status,r.deleted_at AS parent_deleted,d.trip_status_updated_at,${nativeLegStatusSql('d')} AS mobile_leg_status,(SELECT u.role FROM users u WHERE u.id=d.trip_status_updated_by LIMIT 1) AS trip_actor_role,TIMESTAMP(COALESCE(rd.pick_up_date,d.pick_up_date),COALESCE(rd.pick_up_time,d.pick_up_time)) AS starts,
     TIMESTAMP(COALESCE(rd.drop_off_date,d.drop_off_date),COALESCE(rd.drop_off_time,d.drop_off_time)) AS ends
     FROM reservation_drivers rd JOIN reservation_details d ON d.id=rd.reservation_details_id JOIN reservations r ON r.id=rd.reservation_id
     WHERE ${clauses.join(' AND ')} ORDER BY rd.id FOR UPDATE`,params);
@@ -56,8 +57,8 @@ export async function reconcileNativeRows(connection,{reservationId=null,driverI
       const active=existing.find(a=>a.assignment_role===role&&Number(a.driver_id)===driver);
       if(active){
         await connection.execute(`UPDATE app_mobile_assignment_ids SET scheduled_start_at=?,scheduled_end_at=?,
-          assignment_status=IF(?=2,IF(assignment_status='NO_SHOW','NO_SHOW','COMPLETED'),IF(? IN (1,2) AND ? IS NOT NULL AND ?>=COALESCE(updated_at,'1970-01-01') AND ? IN ('ACKNOWLEDGED','PREPARING','ON_THE_WAY','ARRIVED','WAITING','PASSENGER_ONBOARD','IN_SERVICE','AT_STOP','DROPOFF_REACHED','COMPLETED','NO_SHOW','CANCELLED'),?,assignment_status)) WHERE id=?`,
-          [window.start,window.end,row.parent_status,row.trip_actor_role,row.trip_status_updated_at,row.trip_status_updated_at,row.mobile_leg_status,row.mobile_leg_status,active.id]);continue;
+          assignment_status=IF(?=2,IF(assignment_status='NO_SHOW','NO_SHOW','COMPLETED'),IF(? IN (1,2) AND ? IS NOT NULL AND ?>=COALESCE(updated_at,'1970-01-01') AND ? IN ('ASSIGNED','ACKNOWLEDGED','PREPARING','ON_THE_WAY','ARRIVED','WAITING','PASSENGER_ONBOARD','IN_SERVICE','AT_STOP','DROPOFF_REACHED','COMPLETED','NO_SHOW','CANCELLED'),IF(?='ASSIGNED',IF(assignment_status='OFFERED','OFFERED','ACKNOWLEDGED'),?),assignment_status)) WHERE id=?`,
+          [window.start,window.end,row.parent_status,row.trip_actor_role,row.trip_status_updated_at,row.trip_status_updated_at,row.mobile_leg_status,row.mobile_leg_status,row.mobile_leg_status,active.id]);continue;
       }
       let id=null;
       if(row.mobile_assignment_id && (!row.mobile_assignment_role || row.mobile_assignment_role===role)){

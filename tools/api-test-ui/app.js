@@ -56,7 +56,7 @@ action('apply-token',async()=>{
   state.token=token;state.profile=null;$('access-token').value='';
   $('user-pill').textContent='Bearer token active';
   $('auth-message').className='inline-message ok';$('auth-message').textContent='Token loaded in memory. Test /auth/me to confirm its role.';
-  try{const me=await api('GET','/api/v1/auth/me');$('user-pill').textContent=(me.user?.roleName||me.roleName||'Authenticated')+' · Token';}catch{}
+  try{const me=await api('GET','/api/v1/auth/me');$('user-pill').textContent=(me.user?.roleName||me.roleName||'Authenticated')+' · Token';}catch{/* Ignore a non-JSON diagnostic response. */}
 });
 action('clear-token',async()=>{state.token='';state.profile=null;$('password').value='';$('access-token').value='';$('user-pill').textContent='No session';$('auth-message').textContent='Token cleared';$('auth-message').className='inline-message';});
 async function health(){try{await api('GET','/health',null,{auth:false});$('health-dot').className='dot up';$('health-text').textContent='Local backend online';}catch(error){$('health-dot').className='dot down';$('health-text').textContent='Backend unavailable';showError(error);}}

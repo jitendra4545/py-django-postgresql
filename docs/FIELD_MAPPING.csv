@@ -1,0 +1,36 @@
+Endpoint,Existing or additive API field,Exact legacy source,Transformation / precedence
+GET /catalog/services,items[].code,services.title/slug,Editorial name-to-service-code adapter; IDs are not assumed equal
+GET /catalog/services,items[].title/description/iconUrl,services.title/description_en/image,Existing editorial service data
+GET /catalog/vehicle-classes,items[].id/title/image,vehicle_classes.id/title/image,Only active nondeleted service class; eligibility from shared policy
+GET /catalog/vehicle-classes,items[].passengerCapacity,vehicle_dimensions.seating_capacity,Dated rental: selected eligible pickup-city vehicle; other searches retain existing class aggregate; capacity checked again at allocation
+GET /catalog/vehicle-classes,items[].startingPrice,vehicle_class_price_rates.amount / transfer rates,Dated rental: active pickup-season and nearest day-band rate prorated by days; country first then global; excludes nonpositive rates; remains indicative before extras and taxes
+GET /catalog/options,items[].id/title/amount/basedOn/rateType,rental_options + rental_option_classes,Frontend-visible class links; options are untaxed
+GET /catalog/vehicle-classes/:id/booking-options,insuranceChoices,vehicle_classes.half_insurance_* / full_insurance_*,Separate insurance choices; no fabricated rental-option ID
+GET /bookings/:id,id/uuid/reservationNo/customerId/agencyId,reservations.id/uuid/reservation_no/customer_id/agency_id,Native parent identity
+GET /bookings/:id,serviceCode,reservations.service_type,"1 CHAUFFEUR, 2 CAR_RENTAL, 3 TRANSFER"
+GET /bookings/:id,legacyStatus/paymentStatus/currency,reservations.status/payment_status/currency,Native integer flags; € normalized to EUR
+GET /bookings/:id,status,reservations.status + current reservation_details.trip_status_id,Derived native lifecycle takes precedence
+GET /bookings/:id,sourceChannel/createdByAgentId,reservations.source_channel/created_by_agent_id,Existing mobile metadata; WEBSITE fallback
+GET /bookings/:id,legs[].id/sequenceNo,reservation_details.id/sequence_no,"Only current status=1, nondeleted, non-extra legs"
+GET /bookings/:id,legs[].pickupDate/pickupTime/dropoffDate/dropoffTime,reservation_details.pick_up_date/pick_up_time/drop_off_date/drop_off_time,Native current leg timestamps
+GET /bookings/:id,legs[].pickupAddress/dropoffAddress/pickupDetails/dropoffDetails,reservation_details.pick_up_location/drop_off_location + country/city + stored JSON,Native edits override stale JSON addresses; stale geocoordinates cleared
+GET /bookings/:id,legs[].vehicleClassId,reservation_vehicles.vehicle_id -> vehicles.vehicle_class_id,Current native vehicle assignment first; stored class fallback
+GET /bookings/:id,legs[].passengerCount/luggageCount,reservation_details.passenger_count/luggage_count,Existing nullable metadata; defaults 1/0 when legacy did not store counts
+GET /bookings/:id,legs[].flightNumber,reservation_flight_numbers.flight_number,Latest native flight row; existing metadata fallback
+GET /bookings/:id,assignments[],reservation_drivers + app_mobile_assignment_ids + drivers,Role-specific public assignment IDs; current native driver and name
+GET /bookings/:id,costs[].legId/baseRate/optionalCost/totalTax/totalAmount,reservation_costs.reservation_details_id/base_rate/optional_cost/total_tax/total_amount,Active costs on live legs; includes fee-only rows
+GET /bookings/:id,events[],activity_logs existing mobile timeline fields,Current leg lineage mapping
+GET /bookings/:id,payments[]/paymentId/paymentState/canRetryPayment,app_payment_transactions + native outstanding ledger,Provider payload never exposed; native paid flags without receipts block
+GET /bookings/:id/payment-breakdown,summary.total,SUM(reservation_costs.total_amount),Only active costs on current nondeleted details
+GET /bookings/:id/payment-breakdown,summary.paid,SUM(reservation_payments.payment_amount),Approved nondeleted receipts excluding custom_invoices
+GET /bookings/:id/payment-breakdown,summary.amountDue,total minus paid,Clamped at zero; never re-bill collected base
+GET /bookings/:id/payment-breakdown,sections[].options,reservation_optional_costs,"Snapshot label, basis, quantity, unit and stored total"
+GET /bookings/:id/payment-breakdown,sections[].lines/total,reservation_costs component columns + reservation_taxes.tax,Recorded amounts; legacy tax preserved and identified when different
+GET /bookings/:id/payment-breakdown,sections[].title/isExtraService,reservation_details.service_details/is_extra_service,Native additional customer expense label; fee is not a journey
+GET /chauffeur/dashboard and assignments,items[].id/status/scheduledStartAt/scheduledEndAt,app_mobile_assignment_ids mapped to reservation_drivers,Two delivery/collection roles retain independent identity
+POST /chauffeur/assignments/:id/expenses,id/status,app_driver_expenses.id/status,Internal reimbursement only; existing FK identity adapter
+POST /operations/bookings/:id/customer-charges,chargeLegId/amount/tax,reservation_details + reservation_costs,Explicit durable idempotent zero-tax customer fee
+GET /communication/conversations/:id/messages,items[].id/senderUserId/body/messageType/documentId/createdAt,reservation_messages + users + existing conversation mapping,Native admin messages and mobile messages share source
+GET /communication/conversations,unread counts,reservation_message_recipients.read_at,Current authorized audience; assignment changes revoke old chauffeur
+POST /auth/login and agent endpoints,agentId/agencyId/agentType,users.role/status + agents + agencies,Agent role4 requires active agency; active users status0
+DELETE /auth/account and operations role delete,deleted,users.deleted_at + role profile.deleted_at,"Soft deletion, session/push/membership revocation, preserve financial history"

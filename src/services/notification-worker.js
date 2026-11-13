@@ -1,3 +1,4 @@
+import { NATIVE_NOTIFICATIONS } from './legacy-read-adapters.js';
 import crypto from 'node:crypto';
 import { query, transaction } from '../db/pool.js';
 import { getExpoPushReceipts, sendPushToUser } from './push.js';
@@ -26,7 +27,7 @@ export const claimPushJobs = async (limit = JOB_BATCH) => {
     `SELECT j.id,j.user_id AS userId,j.notification_id AS notificationId,
             j.attempts,n.type,n.title,n.body,n.data
        FROM app_push_delivery_jobs j
-       JOIN app_notifications n ON n.id=j.notification_id AND n.user_id=j.user_id
+       JOIN ${NATIVE_NOTIFICATIONS} n ON n.id=j.notification_id AND n.user_id=j.user_id
       WHERE j.lock_token=? AND j.status='PROCESSING'`,
     [lock],
   ).then((rows) => ({ lock, rows }));

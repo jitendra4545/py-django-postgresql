@@ -46,7 +46,8 @@ beforeEach(() => {
   configuredAmount = 500;
   listAvailableVehicles.mockResolvedValue([{ id: 210 }]);
   getVerifiedRouteKm.mockResolvedValue(20);
-  query.mockImplementation(async (sql) => {
+  query.mockImplementation(async (sql, params) => {
+    if (sql.includes('FROM vehicle_dimensions')) return [{seating_capacity:params[0]===209?'1':'7',boot_capacity:'3'}];
     if (sql.includes('FROM vehicle_classes')) {
       return [{
         id: 12, rental_type: 1, one_way_drop_off_charge: 0,
@@ -92,6 +93,12 @@ describe('five-hour chauffeur booking quote', () => {
     );
   });
 
+  it('selects a physical vehicle with sufficient known capacity before quoting', async () => {
+    listAvailableVehicles.mockResolvedValue([{id:209},{id:210}]);
+    const quote=await buildDraftQuote(makeDraft(5));
+    expect(quote.legs[0].vehicleId).toBe(210);
+  });
+
   it('prorates a four-hour rate to five billable hours, not four or twenty', async () => {
     bandSpan = 4;
     configuredAmount = 240;
@@ -114,6 +121,7 @@ describe('five-hour chauffeur booking quote', () => {
 
   it('rejects pricing instead of guessing when the configured rate is missing', async () => {
     query.mockImplementation(async (sql) => {
+      if (sql.includes('FROM vehicle_dimensions')) return [];
       if (sql.includes('FROM vehicle_classes')) return [{ id: 12, rental_type: 1 }];
       if (sql.includes('FROM countries')) return [{ code: 'CH' }];
       if (sql.includes('FROM rental_seasons')) return [];

@@ -47,7 +47,7 @@ export const calculateQuote = async ({
             half_insurance_text_en,half_insurance_text_de,half_insurance_text_fr,
             full_insurance_text_en,full_insurance_text_de,full_insurance_text_fr
        FROM vehicle_classes
-      WHERE id=? AND rental_type=? AND status=1 AND can_reservation_from_website=1
+      WHERE id=? AND rental_type=? AND status=1
         AND deleted_at IS NULL LIMIT 1`,
     [vehicleClassId, rentType],
   );
@@ -67,7 +67,7 @@ export const calculateQuote = async ({
   const season = await fetchOne(
     `SELECT id,name FROM rental_seasons
       WHERE start<=? AND end>=? AND status=1 AND deleted_at IS NULL
-      ORDER BY id DESC LIMIT 1`,
+      ORDER BY id LIMIT 1`,
     [pickupDate, pickupDate],
   );
   // PHP uses season 0 when no active season covers the pickup date. A
@@ -78,15 +78,25 @@ export const calculateQuote = async ({
   let sourceRateType;
   let durationBand = null;
 
+  const resolvePricingCity = async (id,point) => {
+    if(id)return id;
+    if(!point?.city)return null;
+    const city=await fetchOne(`SELECT id FROM cities WHERE deleted_at IS NULL
+      AND (? IS NULL OR country_id=?) AND (name=? OR additional_name_1=? OR additional_name_2=? OR additional_name_3=? OR additional_name_4=?)
+      ORDER BY id LIMIT 1`,[point.countryId??null,point.countryId??null,...Array(5).fill(point.city)]);
+    return city?.id??null;
+  };
+  const pickupRateCityId=await resolvePricingCity(pickupCityId,pickup);
+  const dropoffRateCityId=await resolvePricingCity(dropoffCityId,dropoff);
   if (serviceCode === 'TRANSFER') {
     const cityRate =
-      pickupCityId && dropoffCityId
+      pickupRateCityId && dropoffRateCityId
         ? await fetchOne(
             `SELECT id,price FROM transfer_city_wise_prices
               WHERE vehicle_class_id=? AND deleted_at IS NULL
                 AND ((city_1=? AND city_2=?) OR (city_1=? AND city_2=?))
               ORDER BY (city_1=? AND city_2=?) DESC,id LIMIT 1`,
-            [vehicleClassId, pickupCityId, dropoffCityId, dropoffCityId, pickupCityId,pickupCityId,dropoffCityId],
+            [vehicleClassId,pickupRateCityId,dropoffRateCityId,dropoffRateCityId,pickupRateCityId,pickupRateCityId,dropoffRateCityId],
           )
         : null;
     if (cityRate) {
@@ -105,7 +115,7 @@ export const calculateQuote = async ({
         `SELECT id,base_rate,rate_1,rate_2,rate_3
            FROM vehicle_class_city_wise_base_rates
           WHERE vehicle_class_id=? AND country_id=? AND rental_season_id=?
-            AND rent_type=3 AND deleted_at IS NULL ORDER BY id DESC LIMIT 1`,
+            AND rent_type=3 AND deleted_at IS NULL ORDER BY id LIMIT 1`,
         [vehicleClassId, countryId, seasonId],
       );
       if (countryRate) {
@@ -116,9 +126,9 @@ export const calculateQuote = async ({
         const fallback = await fetchAll(
           `SELECT id,rental_duration_id,amount FROM vehicle_class_price_rates
             WHERE vehicle_class_id=? AND rental_season_id=? AND rent_type=3
-              AND rental_duration_id IN (9,10) AND country_id IN (?,0) AND status=1
-            ORDER BY (country_id=?) DESC,id DESC`,
-          [vehicleClassId, seasonId, countryId, countryId],
+              AND rental_duration_id IN (9,10)
+            ORDER BY id DESC`,
+          [vehicleClassId, seasonId],
         );
         const base = fallback.find((row) => Number(row.rental_duration_id) === 9);
         const perKm = fallback.find((row) => Number(row.rental_duration_id) === 10);
@@ -132,7 +142,7 @@ export const calculateQuote = async ({
     durationBand = await fetchOne(
       `SELECT id,span_duration FROM rental_durations
         WHERE rent_type=? AND status=1 AND span_duration>0
-        ORDER BY (rent_type=1 AND id=15) DESC,ABS(span_duration-?),span_duration,id LIMIT 1`,
+        ORDER BY ABS(span_duration-?),id LIMIT 1`,
       [rentType, units],
     );
     if (!durationBand)
@@ -140,8 +150,9 @@ export const calculateQuote = async ({
     const rate = await fetchOne(
       `SELECT id,amount,country_id FROM vehicle_class_price_rates
         WHERE vehicle_class_id=? AND rental_season_id=? AND rental_duration_id=?
-          AND rent_type=? AND country_id IN (?,0) AND status=1
-        ORDER BY (country_id=?) DESC,id DESC LIMIT 1`,
+          AND rent_type=? AND country_id IN (?,0)
+          ${serviceCode === 'CAR_RENTAL' ? 'AND status=1' : ''}
+        ORDER BY (country_id=?) DESC,id LIMIT 1`,
       [vehicleClassId, seasonId, durationBand.id, rentType, countryId, countryId],
     );
     if (!rate)
@@ -163,10 +174,10 @@ export const calculateQuote = async ({
         `SELECT ro.id,COALESCE(NULLIF(ro.title_en,''),ro.title) AS title,ro.based_on,ro.rate_type,ro.amount,ro.taxable
            FROM rental_options ro
           WHERE ro.id IN (${selectedIds.map(() => '?').join(',')})
-            AND ro.rent_type=? AND ro.status=1 AND ro.show_on_frontend=1 AND ro.deleted_at IS NULL
+            AND ro.show_on_frontend=1 AND ro.deleted_at IS NULL
             AND EXISTS (SELECT 1 FROM rental_option_classes roc
                          WHERE roc.rental_option_id=ro.id AND roc.vehicle_class_id=?)`,
-        [...selectedIds, rentType, vehicleClassId],
+        [...selectedIds, vehicleClassId],
       )
     : []);
   if (options.length !== selectedIds.length) {

@@ -1,0 +1,34 @@
+
+> drive-luxury-backend-r1@2.5.0 build
+> npm run syntax:check && npm run lint && npm test
+
+
+> drive-luxury-backend-r1@2.5.0 syntax:check
+> node scripts/check-syntax.js && node scripts/check-openapi.js && node scripts/check-client-api-contract.mjs
+
+Syntax OK: 143 JavaScript files
+OpenAPI coverage OK: 104 operations
+Client contract gate passed: original route declarations and OpenAPI schema retained
+
+> drive-luxury-backend-r1@2.5.0 lint
+> eslint .
+
+
+> drive-luxury-backend-r1@2.5.0 test
+> vitest run
+
+
+ RUN  v5.0.3 <backend>
+
+GET /reset-password?token=private-token 200 11.825 ms - -
+GET /reset-assets/reset-password.js 200 1.707 ms - -
+
+ Test Files  22 passed (22)
+      Tests  134 passed (134)
+   Start at  17:24:21
+   Duration  5.27s (tests 41%, import 30%, transform 27%, worker 2%)
+
+  Transform  transforming modules took 5.11s · 27% of tracked time, re-done on every run
+             persist transforms across runs with fsModuleCache: true
+             learn more: https://vitest.dev/guide/improving-performance#caching-between-reruns
+
